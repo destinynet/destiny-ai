@@ -41,4 +41,26 @@ class FindModelInfoTest {
     assertEquals(Provider.CLAUDE, ex.provider)
     assertEquals("nope", ex.modelKey)
   }
+
+  /** An impl that does NOT override modelInfos inherits the empty default —
+   *  this is the contract that lets existing impls compile unchanged. */
+  private val unmigrated = object : IChatCompletion {
+    override val provider = Provider.OPENAI
+    override suspend fun chatComplete(
+      model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>,
+      timeout: kotlin.time.Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec?, maxFunctionCallDepth: Int
+    ): Reply<String> = error("not used")
+    override suspend fun <T : Any> typedChatComplete(
+      model: String, messages: List<Msg>, formatSpec: destiny.tools.ai.model.FormatSpec<T>,
+      json: kotlinx.serialization.json.Json, locale: java.util.Locale, chatOptions: ChatOptions,
+      postProcessors: List<IPostProcessor>, user: String?, funCalls: Set<IFunctionDeclaration>,
+      timeout: kotlin.time.Duration, maxFunctionCallDepth: Int
+    ): Reply<T>? = error("not used")
+  }
+
+  @Test
+  fun `default modelInfos is empty — findModelInfo null, requireModelInfo throws`() {
+    assertNull(unmigrated.findModelInfo("anything"))
+    assertFailsWith<NoSuchModelException> { unmigrated.requireModelInfo("anything") }
+  }
 }
