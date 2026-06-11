@@ -100,7 +100,10 @@ interface IChatCompletion {
    */
   val modelInfos: Map<String, ModelInfo> get() = emptyMap()
 
-  /** 查 model 的計價/metadata；查無回 null。 */
+  /**
+   * 查 model 的計價/metadata；查無回 null。
+   * （modelKey 即 model string，等同 [ModelInfo.model] 與 doChatComplete 的 model 參數。）
+   */
   fun findModelInfo(modelKey: String): ModelInfo? = modelInfos[modelKey]
 
   /** 同 [findModelInfo]，但查無即丟 [NoSuchModelException]（fail-fast）。 */
