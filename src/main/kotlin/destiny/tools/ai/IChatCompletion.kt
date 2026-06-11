@@ -94,6 +94,19 @@ interface IChatCompletion {
 
   val provider: Provider
 
+  /**
+   * 此 provider 提供的所有 model metadata。key = model string（即 doChatComplete 收的 model 參數）。
+   * 預設空 map —— 各 impl 在 companion 宣告 MODEL_INFOS 後，以 `override val modelInfos = MODEL_INFOS` 填入。
+   */
+  val modelInfos: Map<String, ModelInfo> get() = emptyMap()
+
+  /** 查 model 的計價/metadata；查無回 null。 */
+  fun findModelInfo(modelKey: String): ModelInfo? = modelInfos[modelKey]
+
+  /** 同 [findModelInfo]，但查無即丟 [NoSuchModelException]（fail-fast）。 */
+  fun requireModelInfo(modelKey: String): ModelInfo =
+    findModelInfo(modelKey) ?: throw NoSuchModelException(provider, modelKey)
+
   suspend fun chatComplete(model: String, messages: List<Msg>, user: String? = null, funCalls: Set<IFunctionDeclaration> = emptySet(), timeout: Duration = 90.seconds, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec? = null, maxFunctionCallDepth: Int = DEFAULT_MAX_FUNCTION_CALL_DEPTH) : Reply<String>
 
   suspend fun chatComplete(model: String, messages: List<Msg>, user: String? = null, funCall: IFunctionDeclaration, timeout: Duration = 90.seconds, chatOptions: ChatOptions, maxFunctionCallDepth: Int = DEFAULT_MAX_FUNCTION_CALL_DEPTH) : Reply<String> {
