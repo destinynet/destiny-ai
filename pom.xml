@@ -14,8 +14,8 @@
 
   <artifactId>destiny-ai</artifactId>
   <packaging>jar</packaging>
-  <name>Destiny AI - Generic AI Infrastructure</name>
-  <description>通用 AI 基礎設施介面層，包含 IChatCompletion、Provider、Function Calling 等核心抽象。完全與命理業務無關，可獨立用於其他專案。</description>
+  <name>destiny-ai</name>
+  <description>Destiny AI - Generic AI Infrastructure. 通用 AI 基礎設施介面層，包含 IChatCompletion、Provider、Function Calling 等核心抽象。完全與命理業務無關，可獨立用於其他專案。</description>
 
   <dependencies>
     <!-- Kotlin -->
