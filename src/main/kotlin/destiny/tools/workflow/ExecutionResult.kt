@@ -72,7 +72,10 @@ data class ExecutionMetadata(
    * 全計畫累計成本 (USD)；需引擎注入 `ModelCostService` 才會算得出，否則 null。
    * 多模型計畫逐筆 reply 依各自 pricing 計價後加總（單一 model 無法涵蓋）。
    */
-  val costUsd: Double? = null
+  val costUsd: Double? = null,
+
+  /** 本次執行實際用到的 (provider, model)，去重、依首次出現順序；無 AI 呼叫則為空。 */
+  val modelsUsed: List<UsedModel> = emptyList()
 ) {
   companion object {
     fun empty() = ExecutionMetadata(
@@ -83,6 +86,12 @@ data class ExecutionMetadata(
     )
   }
 }
+
+/** 一次執行用到的模型（provider + model 名稱）。 */
+data class UsedModel(
+  val provider: String,
+  val model: String
+)
 
 /**
  * Token 使用量（含 cache 維度）。全欄位 nullable：某維度從未收到非 null 值即維持 null（「未知」），
