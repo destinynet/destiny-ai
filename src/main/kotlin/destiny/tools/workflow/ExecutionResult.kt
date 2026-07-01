@@ -65,8 +65,14 @@ data class ExecutionMetadata(
   /** AI 呼叫總次數 */
   val totalAiCalls: Int,
 
-  /** Token 使用量 */
-  val tokenUsage: TokenUsage? = null
+  /** 全計畫累計 Token 使用量（跨所有 AI segment / 並行 item）；無 AI 呼叫則 null */
+  val tokenUsage: TokenUsage? = null,
+
+  /**
+   * 全計畫累計成本 (USD)；需引擎注入 `ModelCostService` 才會算得出，否則 null。
+   * 多模型計畫逐筆 reply 依各自 pricing 計價後加總（單一 model 無法涵蓋）。
+   */
+  val costUsd: Double? = null
 ) {
   companion object {
     fun empty() = ExecutionMetadata(
@@ -79,20 +85,30 @@ data class ExecutionMetadata(
 }
 
 /**
- * Token 使用量
+ * Token 使用量（含 cache 維度）。全欄位 nullable：某維度從未收到非 null 值即維持 null（「未知」），
+ * 與 [destiny.tools.ai.TokenUsageAccumulator] 的 null 語意一致。
  */
 data class TokenUsage(
-  val inputTokens: Int,
-  val outputTokens: Int
+  val inputTokens: Int? = null,
+  val outputTokens: Int? = null,
+  val cacheCreationTokens: Int? = null,
+  val cacheReadTokens: Int? = null
 ) {
-  val totalTokens: Int get() = inputTokens + outputTokens
+  val totalTokens: Int?
+    get() = if (inputTokens == null && outputTokens == null) null
+    else (inputTokens ?: 0) + (outputTokens ?: 0)
 
   operator fun plus(other: TokenUsage) = TokenUsage(
-    inputTokens = this.inputTokens + other.inputTokens,
-    outputTokens = this.outputTokens + other.outputTokens
+    inputTokens = plus(inputTokens, other.inputTokens),
+    outputTokens = plus(outputTokens, other.outputTokens),
+    cacheCreationTokens = plus(cacheCreationTokens, other.cacheCreationTokens),
+    cacheReadTokens = plus(cacheReadTokens, other.cacheReadTokens)
   )
 
+  /** 兩者皆 null → null（維持未知）；否則 null 視為 0 後相加。 */
+  private fun plus(a: Int?, b: Int?): Int? = if (a == null && b == null) null else (a ?: 0) + (b ?: 0)
+
   companion object {
-    val ZERO = TokenUsage(0, 0)
+    val ZERO = TokenUsage(0, 0, 0, 0)
   }
 }
