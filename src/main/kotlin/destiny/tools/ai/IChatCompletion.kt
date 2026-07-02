@@ -283,6 +283,26 @@ abstract class AbstractChatCompletion : IChatCompletion {
     }
   }
 
+  /**
+   * 解析本次 request 實際要送出的 max output tokens。
+   *
+   * caller 於 [ChatOptions.maxTokens] 指定者優先，未指定則用 [providerDefault]；
+   * 最終一律 clamp 到該 model 的 [ModelInfo.maxOutputTokens] 上限（若有登記）——
+   * 超過即自動調降並 warn（例如對 mistral-small 期望 300k → 降為 256k）。
+   *
+   * @param providerDefault caller 未指定 maxTokens 時的保守預設（各 provider 自帶）。
+   */
+  protected fun resolveMaxTokens(model: String, chatOptions: ChatOptions, providerDefault: Int): Int {
+    val requested = chatOptions.maxTokens?.value ?: providerDefault
+    val ceiling = findModelInfo(model)?.maxOutputTokens ?: return requested
+    return if (requested > ceiling) {
+      logger.warn { "$provider: requested maxTokens=$requested exceeds $model ceiling=$ceiling → clamped to $ceiling" }
+      ceiling
+    } else {
+      requested
+    }
+  }
+
   companion object {
     private val logger = KotlinLogging.logger { }
   }
