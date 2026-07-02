@@ -1,18 +1,26 @@
 package destiny.tools.ai
 
+import destiny.tools.ai.serializers.YearMonthSerializer
 import kotlinx.serialization.Serializable
+import java.time.YearMonth
 
 /**
  * 單一 model 的 metadata。自我描述（含 [model] 名稱），可獨立傳遞。
  *
- * @param maxOutputTokens 預留欄位，v1 一律為 null（pricing-only 範圍）。日後再把散落的
- *        maxCompletionTokens / maxOutputTokens map 折進來。
+ * @param maxOutputTokens 該 model 的 output 上限（token）；[destiny.tools.ai.IChatCompletion] 用於 clamp。null = 未登記。
+ * @param contextWindow   最大 context window（input+output 總長，token）；null = 未登記。
+ * @param knowledgeCutoff 訓練知識截止（截到月）；null = 未知。
+ * @param capabilities    模型能力集合，預設純文字（見 [Capability]）。
  */
 @Serializable
 data class ModelInfo(
   val model: String,
   val pricing: ModelPricing,
   val maxOutputTokens: Int? = null,
+  val contextWindow: Int? = null,
+  @Serializable(with = YearMonthSerializer::class)
+  val knowledgeCutoff: YearMonth? = null,
+  val capabilities: Set<Capability> = setOf(Capability.TEXT),
   val deprecated: Boolean = false,
 )
 
