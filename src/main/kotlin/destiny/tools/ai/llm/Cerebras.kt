@@ -68,6 +68,8 @@ class Cerebras {
     @Transient
     val options: CerebrasOptions? = null,
     val tools: List<OpenAi.FunctionDeclaration>? = null,
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null,
   ) {
     val temperature: Double? = options?.temperature
 

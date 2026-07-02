@@ -56,6 +56,8 @@ class Cohere {
                      val stream: Boolean = false,
                      @Transient
                      val options: CohereOptions? = null,
+                     @SerialName("max_tokens")
+                     val maxTokens: Int? = null,
                      ) {
     val temperature: Double? = options?.temperature
     val k: Int? = options?.k

@@ -98,7 +98,9 @@ class Deepseek {
                        val options : DeepseekOptions? = null,
                        val tools: List<OpenAi.FunctionDeclaration>? = null,
                        @Transient
-                       val jsonSchemaSpec: JsonSchemaSpec? = null
+                       val jsonSchemaSpec: JsonSchemaSpec? = null,
+                       @SerialName("max_tokens")
+                       val maxTokens: Int? = null
   ) {
 
     val temperature: Double? = options?.temperature

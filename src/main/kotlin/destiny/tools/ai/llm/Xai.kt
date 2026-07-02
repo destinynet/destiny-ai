@@ -59,7 +59,9 @@ class Xai {
                      @Transient
                      val options: XaiOptions? = null,
                      val stream: Boolean = false,
-                     val tools : List<ToolFunction> = emptyList()
+                     val tools : List<ToolFunction> = emptyList(),
+                     @SerialName("max_tokens")
+                     val maxTokens: Int? = null
   ) {
     val temperature: Double? = options?.temperature
 

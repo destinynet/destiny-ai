@@ -37,7 +37,9 @@ class Together {
     val messages: List<OpenAi.Message>,
     @Transient
     val options: TogetherOptions? = null,
-    val stream: Boolean = false
+    val stream: Boolean = false,
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null
   ) {
     val temperature: Double? = options?.temperature
 
