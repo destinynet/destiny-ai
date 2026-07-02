@@ -111,7 +111,8 @@ class OpenAi {
     @SerialName("error")
     data class ErrorResponse(val error: Error) : Response() {
       @Serializable
-      data class Error(val message: String, val type: String, val code: String?)
+      // type/code 非所有 OpenAI-compat provider 都會回（e.g. XiaoMi 錯誤常缺 type），故皆設為可選
+      data class Error(val message: String, val type: String? = null, val code: String? = null)
     }
 
     @Serializable
