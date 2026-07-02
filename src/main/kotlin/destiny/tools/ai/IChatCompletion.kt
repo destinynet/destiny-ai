@@ -284,18 +284,23 @@ abstract class AbstractChatCompletion : IChatCompletion {
   }
 
   /**
-   * 解析本次 request 實際要送出的 max output tokens。
+   * 解析本次 request 要送出的 max output tokens；回傳 null 代表「不指定，交給 provider server 端預設」。
    *
-   * caller 於 [ChatOptions.maxTokens] 指定者優先，未指定則用 [providerDefault]；
-   * 最終一律 clamp 到該 model 的 [ModelInfo.maxOutputTokens] 上限（若有登記）——
-   * 超過即自動調降並 warn（例如對 mistral-small 期望 300k → 降為 256k）。
+   * 取值優先序：caller 於 [ChatOptions.maxTokens] 指定 → [providerDefault] → 該 model 的
+   * [ModelInfo.maxOutputTokens]；三者皆無 → null。取到的值最終一律 clamp 到
+   * [ModelInfo.maxOutputTokens] 上限（若有登記）—— 超過即自動調降並 warn
+   * （例如對 mistral-small 期望 300k → 降為 256k）。
    *
-   * @param providerDefault caller 未指定 maxTokens 時的保守預設（各 provider 自帶）。
+   * @param providerDefault caller 未指定 maxTokens 時的預設。
+   *        傳 null（預設）表示「未指定時就退到該 model 的 [ModelInfo.maxOutputTokens]」，
+   *        適合 output 上限本身即合理預設、且未登記上限的 model 想沿用 server 預設的 provider
+   *        （OpenAI / XiaoMi / Groq / Reka）；Claude / Mistral 這類上限遠高於一般所需的，
+   *        則傳一個較低的常數當預設。
    */
-  protected fun resolveMaxTokens(model: String, chatOptions: ChatOptions, providerDefault: Int): Int {
-    val requested = chatOptions.maxTokens?.value ?: providerDefault
-    val ceiling = findModelInfo(model)?.maxOutputTokens ?: return requested
-    return if (requested > ceiling) {
+  protected fun resolveMaxTokens(model: String, chatOptions: ChatOptions, providerDefault: Int? = null): Int? {
+    val ceiling = findModelInfo(model)?.maxOutputTokens
+    val requested = chatOptions.maxTokens?.value ?: providerDefault ?: ceiling ?: return null
+    return if (ceiling != null && requested > ceiling) {
       logger.warn { "$provider: requested maxTokens=$requested exceeds $model ceiling=$ceiling → clamped to $ceiling" }
       ceiling
     } else {
