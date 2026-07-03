@@ -14,4 +14,10 @@ interface IProviderModel {
 }
 
 @Serializable
-data class ProviderModel(val provider: Provider, val model: String, @Contextual val temperature: Temperature? = null)
+data class ProviderModel(
+  val provider: Provider,
+  val model: String,
+  @Contextual val temperature: Temperature? = null,
+  /** 此 (domain, model) 專屬的 output 上限;null → 沿用各 impl 的 providerDefault。config 內以 `maxTokens=N` 指定。 */
+  @Contextual val maxTokens: MaxTokens? = null,
+)

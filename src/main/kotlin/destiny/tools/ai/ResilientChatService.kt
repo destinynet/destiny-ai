@@ -100,7 +100,8 @@ class ResilientChatService(
         try {
           val impl = providerImpl.invoke(providerModel.provider)
           val currentChatOptions = chatOptionsTemplate.copy(
-            temperature = providerModel.temperature ?: chatOptionsTemplate.temperature
+            temperature = providerModel.temperature ?: chatOptionsTemplate.temperature,
+            maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens
           )
 
           val reply = impl.typedChatComplete(

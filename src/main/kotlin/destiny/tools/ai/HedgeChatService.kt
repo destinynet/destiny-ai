@@ -53,7 +53,8 @@ class HedgeChatService(
     val deferredMap: Map<ProviderModel, Deferred<Reply<T>?>> = allModels.associateWith { providerModel: ProviderModel ->
 
       val currentChatOptions = chatOptionsTemplate.copy(
-        temperature = providerModel.temperature ?: chatOptionsTemplate.temperature
+        temperature = providerModel.temperature ?: chatOptionsTemplate.temperature,
+        maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens
       )
 
       async(Dispatchers.IO + CoroutineName("ChatCompletion-${providerModel.provider}/${providerModel.model}")) {
