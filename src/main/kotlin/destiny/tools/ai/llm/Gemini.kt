@@ -120,6 +120,10 @@ class Gemini {
        */
       val thinkingConfig: ThinkingConfig? = null
     ) {
+
+      enum class ThinkingLevel {
+        minimal, low, medium, high,
+      }
       /**
        * thinkingBudget: -1 = dynamic（模型自行決定），0 = 關閉 thinking，>0 = 指定 token 上限。
        * includeThoughts 只有在 thinking 已啟用時才合法；對 thinking 預設關閉的 model（如 gemini-2.5-flash-lite）
@@ -128,7 +132,8 @@ class Gemini {
       @Serializable
       data class ThinkingConfig(
         val includeThoughts: Boolean? = null,
-        val thinkingBudget: Int? = null
+        val thinkingBudget: Int? = null,
+        val thinkingLevel: ThinkingLevel? = null,
       )
     }
 
