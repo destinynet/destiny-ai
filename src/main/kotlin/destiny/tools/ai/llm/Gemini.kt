@@ -4,9 +4,11 @@
 package destiny.tools.ai.llm
 
 import destiny.tools.ai.IFunctionDeclaration
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNames
 
 
 class Gemini {
@@ -16,7 +18,15 @@ class Gemini {
     @Serializable
     data class Part(
       val text: String? = null,
-      @SerialName("inline_data") val inlineData: InlineData? = null,
+      /**
+       * request 序列化用 snake_case `inline_data`（Vertex 兩者皆收）；
+       * 但 Vertex **response** 回的是 camelCase `inlineData`（image 輸出 model 的圖片 part），
+       * 故加 [JsonNames] 讓反序列化兩種 key 都認得，否則被 ignoreUnknownKeys 靜默丟棄。
+       */
+      @SerialName("inline_data")
+      @OptIn(ExperimentalSerializationApi::class)
+      @JsonNames("inlineData")
+      val inlineData: InlineData? = null,
       val functionCall: FunctionCall? = null,
       val functionResponse: FunctionResponse? = null,
       /**
@@ -118,7 +128,13 @@ class Gemini {
        * 非 thinking model 會直接 ignore。
        * https://ai.google.dev/gemini-api/docs/thinking
        */
-      val thinkingConfig: ThinkingConfig? = null
+      val thinkingConfig: ThinkingConfig? = null,
+      /**
+       * 回應 modality。image 輸出 model（如 gemini-2.5-flash-image）要求 `["TEXT","IMAGE"]`
+       * 才會在 response parts 回 [Content.Part.inlineData]。null（預設）不序列化 —— 純文字行為不變。
+       * https://ai.google.dev/gemini-api/docs/image-generation
+       */
+      val responseModalities: List<String>? = null
     ) {
 
       enum class ThinkingLevel {
