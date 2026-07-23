@@ -3,16 +3,20 @@
  */
 package destiny.tools.ai
 
-import mu.KotlinLogging
 import destiny.tools.ai.model.FormatSpec
-import kotlinx.coroutines.*
-import kotlinx.coroutines.selects.select
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import java.util.*
 import kotlin.time.Duration
 
 
+/**
+ * Hedged chat completion：preferred model 若在 [HedgeConfig.preferredWait] 內成功即優先回傳，
+ * 否則改用 fallbacks 中第一個成功者。
+ *
+ * 並行請求 / select / 取消等**政策全在 [HedgeOrchestrator]**（generic core）；
+ * 本 class 只是把 [IChatCompletion.typedChatComplete] 綁進 core 的 chat adapter。
+ */
 class HedgeChatService(
   private val config: HedgeConfig,
 ) : IChatOrchestrator {
@@ -38,6 +42,9 @@ class HedgeChatService(
     }
   }
 
+  private val core = HedgeOrchestrator(config.preferred, config.fallbacks, config.preferredWait)
+
+  @Suppress("UNCHECKED_CAST")
   override suspend fun <T : Any> chatComplete(
     formatSpec: FormatSpec<out T>,
     messages: List<Msg>,
@@ -46,65 +53,17 @@ class HedgeChatService(
     funCalls: Set<IFunctionDeclaration>,
     chatOptionsTemplate: ChatOptions,
     providerImpl: (Provider) -> IChatCompletion
-  ): Reply.Normal<out T>? = coroutineScope {
-
-    val allModels = setOf(config.preferred) + config.fallbacks
-
-    val deferredMap: Map<ProviderModel, Deferred<Reply<T>?>> = allModels.associateWith { providerModel: ProviderModel ->
-
+  ): Reply.Normal<out T>? {
+    return core.execute { providerModel ->
+      val impl = providerImpl.invoke(providerModel.provider)
       val currentChatOptions = chatOptionsTemplate.copy(
         temperature = providerModel.temperature ?: chatOptionsTemplate.temperature,
         maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens
       )
-
-      async(Dispatchers.IO + CoroutineName("ChatCompletion-${providerModel.provider}/${providerModel.model}")) {
-        val impl = providerImpl.invoke(providerModel.provider)
-        impl.typedChatComplete(providerModel.model, messages, formatSpec, json, locale, currentChatOptions, postProcessors, config.user, funCalls, config.modelTimeout)
-      }
+      impl.typedChatComplete(
+        providerModel.model, messages, formatSpec as FormatSpec<T>, json, locale,
+        currentChatOptions, postProcessors, config.user, funCalls, config.modelTimeout
+      )
     }
-
-    val preferredResult: Reply<T>? = withTimeoutOrNull(config.preferredWait) {
-      deferredMap[config.preferred]?.await()
-    }
-
-    if (preferredResult is Reply.Normal) {
-      // preferred 在時限內成功完成 -> 回傳 preferred，並取消其他
-      logger.info { "Preferred model ${config.preferred} succeeded within the time limit." }
-      deferredMap.filterKeys { it != config.preferred }.values.forEach { it.cancel() }
-      preferredResult
-    } else {
-      // preferred 超時、失敗(Error)或回傳null -> 從 fallbacks 中選擇第一個成功的
-      if (preferredResult != null) {
-        logger.warn { "Preferred model ${config.preferred} failed or returned an error: $preferredResult. Looking for a fallback..." }
-      } else {
-        logger.warn { "Preferred model ${config.preferred} timed out. Looking for a fallback..." }
-      }
-
-      // 4. 只在 fallbacks 中 select，不再包含已經失敗的 preferred
-      val fallbackDeferreds = deferredMap.filterKeys { it in config.fallbacks }
-
-
-      select {
-        fallbackDeferreds.forEach { (model, deferred) ->
-          deferred.onAwait { res ->
-            // 只選擇成功的 Normal 結果
-            if (res is Reply.Normal) {
-              model to res
-            } else {
-              // 忽略 Error 或 null 的結果
-              null
-            }
-          }
-        }
-      }?.also { (winnerModel, _) ->
-        logger.info { "Using fallback result from $winnerModel" }
-        // 取消所有其他仍在執行的任務
-        deferredMap.filterKeys { it != winnerModel }.values.forEach { if (it.isActive) it.cancel() }
-      }?.second
-    }
-  }
-
-  companion object {
-    val logger = KotlinLogging.logger {}
   }
 }
