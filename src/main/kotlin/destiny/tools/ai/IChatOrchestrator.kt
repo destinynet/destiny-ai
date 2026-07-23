@@ -35,8 +35,8 @@ interface IChatOrchestrator {
 }
 
 interface IChatOrchestratorFactory {
-  fun hedged(config: HedgeChatService.HedgeConfig): IChatOrchestrator
-  fun resilient(config: ResilientChatService.ResilientConfig): IChatOrchestrator
+  fun hedged(config: HedgeConfig): IChatOrchestrator
+  fun resilient(config: ResilientConfig): IChatOrchestrator
 }
 
 interface IChatConfig {

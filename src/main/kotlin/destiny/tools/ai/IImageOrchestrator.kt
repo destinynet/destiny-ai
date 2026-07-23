@@ -23,8 +23,8 @@ interface IImageOrchestrator {
  * 參數型別相同、僅回傳型別不同，同名會使同一個 concrete class 無法同時實作兩個 interface。
  */
 interface IImageOrchestratorFactory {
-  fun hedgedImage(config: HedgeChatService.HedgeConfig): IImageOrchestrator
-  fun resilientImage(config: ResilientChatService.ResilientConfig): IImageOrchestrator
+  fun hedgedImage(config: HedgeConfig): IImageOrchestrator
+  fun resilientImage(config: ResilientConfig): IImageOrchestrator
 }
 
 /**
@@ -32,7 +32,7 @@ interface IImageOrchestratorFactory {
  * 本 class 只是把 [IImageGeneration.generateImage] 綁進 core 的 image adapter。
  */
 class ResilientImageService(
-  private val config: ResilientChatService.ResilientConfig
+  private val config: ResilientConfig
 ) : IImageOrchestrator {
 
   private val core = ResilientOrchestrator(config.providerModels, config.delayBetweenModelLoops, config.maxTotalAttempts)
@@ -57,7 +57,7 @@ class ResilientImageService(
  * 除非 caller 明確願意花錢換低延遲，一般 image 場景建議用 [ResilientImageService]。
  */
 class HedgeImageService(
-  private val config: HedgeChatService.HedgeConfig
+  private val config: HedgeConfig
 ) : IImageOrchestrator {
 
   private val core = HedgeOrchestrator(config.preferred, config.fallbacks, config.preferredWait)

@@ -24,7 +24,7 @@ class ImageOrchestratorTest {
     ): Reply<List<GeneratedImage>> = handler(model, prompt, options)
   }
 
-  private fun resilientConfig(vararg pms: ProviderModel) = ResilientChatService.ResilientConfig(
+  private fun resilientConfig(vararg pms: ProviderModel) = ResilientConfig(
     providerModels = pms.toSet(),
     modelTimeout = 30.seconds,
     delayBetweenModelLoops = 1.seconds,
@@ -82,7 +82,7 @@ class ImageOrchestratorTest {
 
   @Test
   fun `hedge - preferred success wins`() = runBlocking {
-    val config = HedgeChatService.HedgeConfig(
+    val config = HedgeConfig(
       preferred = gemini, preferredWait = 2.seconds, fallbacks = setOf(openai),
       modelTimeout = 30.seconds, user = null,
     )
@@ -95,7 +95,7 @@ class ImageOrchestratorTest {
 
   @Test
   fun `hedge - preferred failure falls back`() = runBlocking {
-    val config = HedgeChatService.HedgeConfig(
+    val config = HedgeConfig(
       preferred = gemini, preferredWait = 2.seconds, fallbacks = setOf(openai),
       modelTimeout = 30.seconds, user = null,
     )

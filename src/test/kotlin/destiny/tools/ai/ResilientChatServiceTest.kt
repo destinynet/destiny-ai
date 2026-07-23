@@ -38,7 +38,7 @@ class ResilientChatServiceTest {
   }
 
   private fun config(vararg pms: ProviderModel, maxTotalAttempts: Int = 2) =
-    ResilientChatService.ResilientConfig(
+    ResilientConfig(
       providerModels = pms.toSet(),
       modelTimeout = 30.seconds,
       delayBetweenModelLoops = 1.seconds,

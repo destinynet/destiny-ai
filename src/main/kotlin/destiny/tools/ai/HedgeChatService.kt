@@ -7,7 +7,6 @@ import destiny.tools.ai.model.FormatSpec
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import java.util.*
-import kotlin.time.Duration
 
 
 /**
@@ -27,19 +26,6 @@ class HedgeChatService(
     ignoreUnknownKeys = true
     allowTrailingComma = true
     isLenient = true
-  }
-
-  data class HedgeConfig(
-    val preferred: ProviderModel,
-    val preferredWait: Duration,  // preferred model 若能在此段時間內有結果，則優先回傳
-    val fallbacks: Set<ProviderModel>,
-    override val modelTimeout: Duration,
-    override val user: String?
-  ) : IChatConfig {
-    init {
-      require(!fallbacks.contains(preferred))
-      require(modelTimeout > preferredWait)
-    }
   }
 
   private val core = HedgeOrchestrator(config.preferred, config.fallbacks, config.preferredWait)

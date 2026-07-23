@@ -40,7 +40,7 @@ class HedgeChatServiceTest {
     ): Reply<T>? = handler(model, chatOptions) as Reply<T>?
   }
 
-  private fun config() = HedgeChatService.HedgeConfig(
+  private fun config() = HedgeConfig(
     preferred = preferred,
     preferredWait = 2.seconds,
     fallbacks = setOf(fallback),

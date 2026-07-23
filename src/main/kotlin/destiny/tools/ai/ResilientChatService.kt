@@ -7,8 +7,6 @@ import destiny.tools.ai.model.FormatSpec
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import java.util.*
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.seconds
 
 
 /**
@@ -39,15 +37,6 @@ class ResilientChatService(
     allowTrailingComma = true
     isLenient = true
   }
-
-  // 可以定義一個配置類
-  data class ResilientConfig(
-    val providerModels: Set<ProviderModel>,
-    override val modelTimeout: Duration, // 在完整輪詢所有模型都失敗後，再次開始新一輪輪詢前的延遲
-    val delayBetweenModelLoops: Duration = 2.seconds, // 最多進行多少輪完整的模型輪詢
-    val maxTotalAttempts: Int = 3,
-    override val user: String? = null,
-  ) : IChatConfig
 
   private val core = ResilientOrchestrator(config.providerModels, config.delayBetweenModelLoops, config.maxTotalAttempts)
 
