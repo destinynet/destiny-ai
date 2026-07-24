@@ -48,6 +48,7 @@ class HedgeOrchestratorTest {
     assertEquals(100, currentTime)
   }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `preferred timeout falls back to successful fallback`() = runTest {
     val result = orchestrator(fb1).execute { pm ->
