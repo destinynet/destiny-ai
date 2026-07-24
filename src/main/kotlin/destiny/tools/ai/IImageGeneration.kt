@@ -30,20 +30,29 @@ data class GeneratedImage(
 }
 
 /**
- * 圖片生成參數 —— provider-agnostic；各 impl 自行 mapping 到具體 API 欄位，不支援的欄位忽略。
+ * 圖片生成參數 —— provider-agnostic；各 impl 自行 mapping 到具體 API 欄位
+ * （Gemini `imageConfig`、gpt-image `size`/`quality`、FLUX `width`/`height`），不支援的欄位忽略。
  *
- * @param n       要生成幾張；預設 1。
- * @param size    尺寸 / 長寬比 hint（e.g. "1024x1024"、"16:9"）；null = provider 預設。
- * @param quality 品質 hint（e.g. "standard" / "hd"）；null = provider 預設。
+ * [resolution] / [quality] 與計價維度（[ImageSpec]）同源 —— 請求參數即計價查表的 key。
+ *
+ * @param n          要生成幾張；預設 1。
+ * @param resolution 解析度級距；null = provider 預設。
+ * @param quality    品質；null = provider 預設。
  */
 data class ImageOptions(
   val n: Int = 1,
-  val size: String? = null,
-  val quality: String? = null,
+  val resolution: ImageResolution? = null,
+  val quality: ImageQuality? = null,
 ) {
   init {
     require(n >= 1) { "n must be >= 1" }
   }
+
+  /** 正規化為計價查表用的 [ImageSpec]（null 補上預設值）。 */
+  fun toSpec(): ImageSpec = ImageSpec(
+    resolution ?: ImageResolution.R1K,
+    quality ?: ImageQuality.STANDARD,
+  )
 }
 
 /**

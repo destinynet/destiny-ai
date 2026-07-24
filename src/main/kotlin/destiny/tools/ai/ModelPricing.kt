@@ -18,6 +18,12 @@ data class ModelPricing(
   val cacheRead: Double? = null,
   /** USD / 1M cache-write input tokens；null → 以 [input] 計 */
   val cacheWrite: Double? = null,
+  /**
+   * Text-to-image 計價（見 [ImagePricing] 的三種 scheme）；null = 非 image model 或未登記。
+   * token 制 model（Gemini / gpt-image）此欄位僅供**事前預估**——事後精算仍走 [cost]
+   * （回應帶真實 outputTokens）。
+   */
+  val image: ImagePricing? = null,
 ) {
   /**
    * 依各維度 token 數算出此次呼叫的 USD 成本。token 參數直接對應 Reply.Normal 的

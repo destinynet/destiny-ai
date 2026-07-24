@@ -60,7 +60,7 @@ class ImageOrchestratorTest {
     val service = ResilientImageService(resilientConfig(gemini))
     var seenOptions: ImageOptions? = null
     var seenPrompt: String? = null
-    service.generateImage("a black cat", ImageOptions(n = 2, size = "1024x1024")) { provider ->
+    service.generateImage("a black cat", ImageOptions(n = 2, resolution = ImageResolution.R2K)) { provider ->
       FakeImageGen(provider) { _, prompt, options ->
         seenPrompt = prompt
         seenOptions = options
@@ -68,7 +68,7 @@ class ImageOrchestratorTest {
       }
     }
     assertEquals("a black cat", seenPrompt)
-    assertEquals(ImageOptions(n = 2, size = "1024x1024"), seenOptions)
+    assertEquals(ImageOptions(n = 2, resolution = ImageResolution.R2K), seenOptions)
   }
 
   @Test
