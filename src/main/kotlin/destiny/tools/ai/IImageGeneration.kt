@@ -70,9 +70,7 @@ data class ImageOptions(
  * 回傳沿用 [Reply]：錯誤分類（Retryable / Terminal）與 orchestrator
  * （[ResilientOrchestrator] / [HedgeOrchestrator]）直接複用。
  */
-interface IImageGeneration {
-
-  val provider: Provider
+interface IImageGeneration : IModelInfoSource {
 
   suspend fun generateImage(
     model: String,

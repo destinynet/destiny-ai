@@ -3,8 +3,8 @@ package destiny.tools.ai
 /**
  * 跨 provider 的 model metadata 查詢入口（**讀取 facade**）。
  *
- * 與 [IChatCompletion.findModelInfo]（provider 本地捷徑）的分工：
- * - [IChatCompletion.findModelInfo]：已握有某 provider 的 impl 時，就地查該 provider 的 model。
+ * 與 [IModelInfoSource.findModelInfo]（provider 本地捷徑）的分工：
+ * - [IModelInfoSource.findModelInfo]：已握有某 provider 的 impl 時，就地查該 provider 的 model。
  * - [IModelCatalog]：只有 `(provider, model)` 一對值、不想自己去找對的 impl bean 時的中央入口。
  *
  * **它同時是未來 ADOPT 的接縫**：Step 1（WARN）一律回 seed；日後若要以 models.dev catalog 覆蓋

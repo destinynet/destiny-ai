@@ -24,7 +24,7 @@ data class ModelInfo(
   val deprecated: Boolean = false,
 )
 
-/** [IChatCompletion.requireModelInfo] 查無此 model 時拋出。 */
+/** [IModelInfoSource.requireModelInfo] 查無此 model 時拋出。 */
 class NoSuchModelException(
   val provider: Provider,
   val modelKey: String,
