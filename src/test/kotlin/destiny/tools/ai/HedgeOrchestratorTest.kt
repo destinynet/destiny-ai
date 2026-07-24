@@ -1,5 +1,6 @@
 package destiny.tools.ai
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
@@ -33,6 +34,7 @@ class HedgeOrchestratorTest {
     assertEquals("preferred", result?.content)
   }
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `slow fallback is cancelled once preferred wins`() = runTest {
     val result = orchestrator(fb1).execute { pm ->
