@@ -11,6 +11,7 @@ import kotlin.test.assertNull
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class HedgeOrchestratorTest {
 
   private val preferred = ProviderModel(Provider.CLAUDE, "claude-x")
