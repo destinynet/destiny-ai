@@ -35,7 +35,6 @@ class HedgeOrchestratorTest {
     assertEquals("preferred", result?.content)
   }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `slow fallback is cancelled once preferred wins`() = runTest {
     val result = orchestrator(fb1).execute { pm ->
@@ -49,7 +48,6 @@ class HedgeOrchestratorTest {
     assertEquals(100, currentTime)
   }
 
-  @OptIn(ExperimentalCoroutinesApi::class)
   @Test
   fun `preferred timeout falls back to successful fallback`() = runTest {
     val result = orchestrator(fb1).execute { pm ->
