@@ -17,4 +17,6 @@ enum class Provider {
   TOGETHER,
   CEREBRAS,
   XIAOMI,
+  /** image-only 代管商（托管 FLUX schnell / aesthetic-anime 等），無 chat API。 */
+  REPLICATE,
 }

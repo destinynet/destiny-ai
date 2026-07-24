@@ -30,19 +30,37 @@ data class GeneratedImage(
 }
 
 /**
+ * 圖片長寬比 —— provider-agnostic 詞彙。[ratio] 採 "W:H" 通用記法（flux / ideogram 直接吃此字串，
+ * 並非某家專屬格式）；不支援 aspect ratio 的 impl（如 Gemini 目前）忽略之。
+ *
+ * 與 [ImageResolution]（＝圖多大／幾 MP，計價維度）正交：aspect 決定「形狀」，resolution 決定「尺寸」。
+ */
+enum class AspectRatio(val ratio: String) {
+  SQUARE("1:1"),
+  LANDSCAPE_16_9("16:9"),
+  PORTRAIT_9_16("9:16"),
+  LANDSCAPE_4_3("4:3"),
+  PORTRAIT_3_4("3:4"),
+  LANDSCAPE_3_2("3:2"),
+  PORTRAIT_2_3("2:3"),
+}
+
+/**
  * 圖片生成參數 —— provider-agnostic；各 impl 自行 mapping 到具體 API 欄位
- * （Gemini `imageConfig`、gpt-image `size`/`quality`、FLUX `width`/`height`），不支援的欄位忽略。
+ * （Gemini `imageConfig`、gpt-image `size`/`quality`、FLUX `aspect_ratio`/`num_outputs`），不支援的欄位忽略。
  *
  * [resolution] / [quality] 與計價維度（[ImageSpec]）同源 —— 請求參數即計價查表的 key。
  *
- * @param n          要生成幾張；預設 1。
- * @param resolution 解析度級距；null = provider 預設。
- * @param quality    品質；null = provider 預設。
+ * @param n           要生成幾張；預設 1。
+ * @param resolution  解析度級距；null = provider 預設。
+ * @param quality     品質；null = provider 預設。
+ * @param aspectRatio 長寬比；null = provider 預設（多為 1:1）。
  */
 data class ImageOptions(
   val n: Int = 1,
   val resolution: ImageResolution? = null,
   val quality: ImageQuality? = null,
+  val aspectRatio: AspectRatio? = null,
 ) {
   init {
     require(n >= 1) { "n must be >= 1" }
