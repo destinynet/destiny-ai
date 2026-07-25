@@ -104,7 +104,9 @@ data class ExecutionMetadata(
   val modelsUsed: List<UsedModel> = emptyList(),
 
   /**
-   * 各 segment 各自的用量/成本；未發出呼叫的段（Static/Compute、或續跑時被跳過者）不會出現。
+   * 各 segment 各自的用量/成本；未發出呼叫的段（Static/Compute、或續跑時被跳過者）不會出現，
+   * **已發起但還沒拿到回應就失敗的段**（例如引擎缺相依設定、provider 直接拋錯）同樣不會出現 ——
+   * 故「不在 segmentUsages」不等於「沒跑」，要判斷跑了幾次請看 [totalAiCalls] / [totalImageCalls]。
    * 加總即等於 [tokenUsage] / [costUsd]。
    */
   val segmentUsages: Map<SegmentId, SegmentUsage> = emptyMap()
@@ -134,7 +136,9 @@ data class UsedModel(
 data class SegmentUsage(
   /**
    * **有拿到回應**（因而算得出用量）的呼叫數。與 [ExecutionMetadata.totalAiCalls] 的「已發起」
-   * 口徑不同：失敗／被取消的呼叫沒有用量可記，故全段加總 ≤ 那組總計數。
+   * 口徑不同：失敗／被取消的呼叫沒有用量可記。故全段加總的關係是
+   * `Σcalls ≤ totalAiCalls + totalImageCalls` —— 兩組總計數要一起看，因為文字段與生圖段的
+   * calls 混在這同一個欄位裡（生圖那幾筆只出現在 [ExecutionMetadata.totalImageCalls]）。
    */
   val calls: Int,
   val tokenUsage: TokenUsage?,
