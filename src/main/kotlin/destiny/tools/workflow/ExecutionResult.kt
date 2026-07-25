@@ -62,12 +62,19 @@ data class ExecutionMetadata(
   /** 並行執行次數 */
   val parallelExecutions: Int,
 
-  /** AI 呼叫總次數（僅文字/chat 呼叫；生圖見 [totalImageCalls]） */
+  /**
+   * AI 呼叫總次數（僅文字/chat 呼叫；生圖見 [totalImageCalls]）。
+   *
+   * 計的是**已發起**的呼叫 —— 含失敗與被取消者，與 [costUsd] 同一口徑：請求送出後對方就可能
+   * 已計費，事後把它從次數裡抹掉，只會讓兩個欄位對同一次失敗給出矛盾的說法。
+   * 代價是它為**上界**：連 orchestrator 都還沒碰到就失敗的 segment（例如引擎缺相依設定）也計入。
+   */
   val totalAiCalls: Int,
 
   /**
    * 生圖呼叫總次數（每個 ImageSegment 一次，不論該次要求幾張）。
-   * 與 [totalAiCalls] 分開計：兩者計價維度不同（token vs per-image / per-MP），混計無意義。
+   * 與 [totalAiCalls] 分開計：兩者計價維度不同（token vs per-image / per-MP），混計無意義；
+   * 「已發起」的口徑同 [totalAiCalls]。
    */
   val totalImageCalls: Int = 0,
 
