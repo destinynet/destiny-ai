@@ -5,6 +5,8 @@
  */
 package destiny.tools.workflow
 
+import destiny.tools.ai.GeneratedImage
+
 /**
  * Segment 輸出基礎介面
  *
@@ -36,6 +38,14 @@ data class ParallelOutput<T : SegmentOutput>(
   /** 是否全部成功 */
   val isAllSuccessful: Boolean get() = failed.isEmpty()
 }
+
+/**
+ * 圖片生成區段的輸出 —— 一或多張生成圖。
+ *
+ * 之所以包一層而非讓 [destiny.tools.ai.GeneratedImage] 直接實作 [SegmentOutput]：
+ * 前者是純資料型別（也用於 vision 回灌），不該背上 workflow 的依賴。
+ */
+data class ImageOutput(val images: List<GeneratedImage>) : SegmentOutput
 
 /**
  * 失敗的項目資訊
