@@ -196,7 +196,15 @@ class Gemini {
         val candidatesTokenCount: Int,
         val totalTokenCount: Int,
         val thoughtsTokenCount: Int?
-      )
+      ) {
+        /**
+         * 計費上的 output tokens。[candidatesTokenCount] **不含** thinking tokens，
+         * 但 thinking 一樣按 output 費率計費 —— 對映 [destiny.tools.ai.Reply.Normal.outputTokens]
+         * 時一律用本值，別直接拿 candidatesTokenCount（那是生圖路曾漏帳的原因）。
+         */
+        val billedOutputTokens: Int
+          get() = candidatesTokenCount + (thoughtsTokenCount ?: 0)
+      }
 
       @Serializable
       data class PromptFeedback(
