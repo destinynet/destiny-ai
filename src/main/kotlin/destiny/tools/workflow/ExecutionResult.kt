@@ -62,8 +62,14 @@ data class ExecutionMetadata(
   /** 並行執行次數 */
   val parallelExecutions: Int,
 
-  /** AI 呼叫總次數 */
+  /** AI 呼叫總次數（僅文字/chat 呼叫；生圖見 [totalImageCalls]） */
   val totalAiCalls: Int,
+
+  /**
+   * 生圖呼叫總次數（每個 ImageSegment 一次，不論該次要求幾張）。
+   * 與 [totalAiCalls] 分開計：兩者計價維度不同（token vs per-image / per-MP），混計無意義。
+   */
+  val totalImageCalls: Int = 0,
 
   /** 全計畫累計 Token 使用量（跨所有 AI segment / 並行 item）；無 AI 呼叫則 null */
   val tokenUsage: TokenUsage? = null,
