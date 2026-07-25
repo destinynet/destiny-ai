@@ -71,7 +71,12 @@ data class ExecutionMetadata(
    */
   val totalImageCalls: Int = 0,
 
-  /** 全計畫累計 Token 使用量（跨所有 AI segment / 並行 item）；無 AI 呼叫則 null */
+  /**
+   * 全計畫累計 Token 使用量（跨所有 AI segment / 並行 item）；無 AI 呼叫則 null。
+   *
+   * 含 **chat-native 生圖模型**（如 Gemini，回應帶真實 token）的 token —— 與文字 segment 混計、
+   * 不區分來源；per-image / per-MP 計價的 provider（如 Replicate）無 token 可報，只反映在 [costUsd]。
+   */
   val tokenUsage: TokenUsage? = null,
 
   /**
