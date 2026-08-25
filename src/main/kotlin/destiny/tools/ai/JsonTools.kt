@@ -271,12 +271,17 @@ private fun JsonObjectBuilder.handleMapType(mapType: KType, visited: MutableSet<
 private fun JsonObjectBuilder.addValueTypeSchema(nullableValueType: KType?, visited: MutableSet<KClass<*>>) {
   val valueType = nullableValueType?.withNullability(false)
   if (valueType != null) {
+    val valueClassifier = valueType.classifier
     when {
       valueType.isSubtypeOf(typeOf<List<*>>()) || valueType.isSubtypeOf(typeOf<Array<*>>()) ->
         handleCollectionType(valueType, visited)
 
-      valueType.toJsonSchemaType() == "object" && valueType.classifier is KClass<*>         ->
-        handleObjectType(valueType.classifier as KClass<*>, visited)
+      valueType.toJsonSchemaType() == "object" && valueClassifier is KClass<*>              ->
+        handleObjectType(valueClassifier, visited)
+
+      // 同 [handleCollectionType] 的理由：Map 的值若是 enum，不攔就會丟失值域約束
+      valueClassifier is KClass<*> && valueClassifier.java.isEnum                           ->
+        handleEnumType(valueClassifier)
 
       else                                                                                  ->
         putTypeAndFormat(valueType)
@@ -293,22 +298,29 @@ private fun JsonObjectBuilder.handleCollectionType(collectionType: KType, visite
   // Add items schema based on the collection element type
   val elementType = collectionType.arguments.firstOrNull()?.type?.withNullability(false)
   if (elementType != null) {
+    val elementClassifier = elementType.classifier
     putJsonObject("items") {
-      if (elementType.toJsonSchemaType() == "object" && elementType.classifier is KClass<*>) {
-        val elementClass = elementType.classifier as KClass<*>
+      if (elementType.toJsonSchemaType() == "object" && elementClassifier is KClass<*>) {
         // 檢查是否循環參照
-        if (elementClass in visited) {
-          put("\$ref", "#/definitions/${elementClass.simpleName}")
-          put("description", "Circular reference to ${elementClass.simpleName}")
+        if (elementClassifier in visited) {
+          put("\$ref", "#/definitions/${elementClassifier.simpleName}")
+          put("description", "Circular reference to ${elementClassifier.simpleName}")
         } else {
           // It's a list of objects, detail the object structure
           put("type", "object")
           putJsonObject("properties") {
-            processClassProperties(elementClass, visited)
+            processClassProperties(elementClassifier, visited)
           }
           // Add required fields for the item class
-          addRequiredFields(elementClass)
+          addRequiredFields(elementClassifier)
         }
+      }
+      // enum 元素：`toJsonSchemaType()` 對 enum 回 "string"，若不先攔就會掉到下面的
+      // `putTypeAndFormat` 而**丟失值域約束** —— `List<EventType>` 會變成裸的
+      // `{"type":"string"}`，模型可以寫出不存在的列舉值。純量欄位走
+      // `processClassProperties` 的 enum 分支不受影響，只有集合元素與 Map 值有這個洞。
+      else if (elementClassifier is KClass<*> && elementClassifier.java.isEnum) {
+        handleEnumType(elementClassifier)
       } else {
         // Simple type (including date/time with format)
         putTypeAndFormat(elementType)
