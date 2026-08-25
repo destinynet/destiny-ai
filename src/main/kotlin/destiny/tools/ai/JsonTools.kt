@@ -12,29 +12,34 @@ import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubtypeOf
 import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.starProjectedType
+import kotlin.reflect.full.withNullability
 import kotlin.reflect.typeOf
 
 fun KType.toJsonSchemaType(): String {
+  // `String?` 並非 `String` 的 subtype —— 不先剝掉 nullability，所有可為 null 的
+  // primitive 都會掉進最後的 `else -> "object"`，被當成巢狀物件反射展開
+  // （`String?` → `{"length": int}`、`Int?` / `Boolean?` → `{}`）。
+  val t = this.withNullability(false)
   return when {
-    this.isSubtypeOf(typeOf<String>())                                          -> "string"
-    this.isSubtypeOf(typeOf<Int>()) || this.isSubtypeOf(typeOf<Long>())         -> "integer"
-    this.isSubtypeOf(typeOf<Float>()) || this.isSubtypeOf(typeOf<Double>())     -> "number"
-    this.isSubtypeOf(typeOf<Boolean>())                                         -> "boolean"
-    this.isSubtypeOf(typeOf<List<*>>()) || this.isSubtypeOf(typeOf<Array<*>>()) -> "array"
-    this.isSubtypeOf(typeOf<Map<*, *>>())                                       -> "object"
+    t.isSubtypeOf(typeOf<String>())                                       -> "string"
+    t.isSubtypeOf(typeOf<Int>()) || t.isSubtypeOf(typeOf<Long>())         -> "integer"
+    t.isSubtypeOf(typeOf<Float>()) || t.isSubtypeOf(typeOf<Double>())     -> "number"
+    t.isSubtypeOf(typeOf<Boolean>())                                      -> "boolean"
+    t.isSubtypeOf(typeOf<List<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) -> "array"
+    t.isSubtypeOf(typeOf<Map<*, *>>())                                    -> "object"
     // Date/Time types
-    this.isSubtypeOf(typeOf<java.time.LocalDate>())                             -> "string"
-    this.isSubtypeOf(typeOf<java.time.LocalDateTime>())                         -> "string"
-    this.isSubtypeOf(typeOf<java.time.ZonedDateTime>())                         -> "string"
-    this.isSubtypeOf(typeOf<java.time.OffsetDateTime>())                        -> "string"
-    this.isSubtypeOf(typeOf<java.time.Instant>())                               -> "string"
-    this.isSubtypeOf(typeOf<java.util.Date>())                                  -> "string"
+    t.isSubtypeOf(typeOf<java.time.LocalDate>())                          -> "string"
+    t.isSubtypeOf(typeOf<java.time.LocalDateTime>())                      -> "string"
+    t.isSubtypeOf(typeOf<java.time.ZonedDateTime>())                      -> "string"
+    t.isSubtypeOf(typeOf<java.time.OffsetDateTime>())                     -> "string"
+    t.isSubtypeOf(typeOf<java.time.Instant>())                            -> "string"
+    t.isSubtypeOf(typeOf<java.util.Date>())                               -> "string"
 
-    this.isSubtypeOf(typeOf<java.math.BigInteger>()) ||
-      this.isSubtypeOf(typeOf<java.math.BigDecimal>())                          -> "string"
+    t.isSubtypeOf(typeOf<java.math.BigInteger>()) ||
+      t.isSubtypeOf(typeOf<java.math.BigDecimal>())                       -> "string"
 
-    this.isSubtypeOf(typeOf<Enum<*>>())                                         -> "string"
-    else                                                                        -> "object"
+    t.isSubtypeOf(typeOf<Enum<*>>())                                      -> "string"
+    else                                                                  -> "object"
   }
 }
 
@@ -43,14 +48,15 @@ fun KType.toJsonSchemaType(): String {
  * @return format 字串，若非日期類型則回傳 null
  */
 fun KType.toJsonSchemaFormat(): String? {
+  val t = this.withNullability(false)
   return when {
-    this.isSubtypeOf(typeOf<java.time.LocalDate>())      -> "date"
-    this.isSubtypeOf(typeOf<java.time.LocalDateTime>())  -> "date-time"
-    this.isSubtypeOf(typeOf<java.time.ZonedDateTime>())  -> "date-time"
-    this.isSubtypeOf(typeOf<java.time.OffsetDateTime>()) -> "date-time"
-    this.isSubtypeOf(typeOf<java.time.Instant>())        -> "date-time"
-    this.isSubtypeOf(typeOf<java.util.Date>())           -> "date-time"
-    else                                                 -> null
+    t.isSubtypeOf(typeOf<java.time.LocalDate>())      -> "date"
+    t.isSubtypeOf(typeOf<java.time.LocalDateTime>())  -> "date-time"
+    t.isSubtypeOf(typeOf<java.time.ZonedDateTime>())  -> "date-time"
+    t.isSubtypeOf(typeOf<java.time.OffsetDateTime>()) -> "date-time"
+    t.isSubtypeOf(typeOf<java.time.Instant>())        -> "date-time"
+    t.isSubtypeOf(typeOf<java.util.Date>())           -> "date-time"
+    else                                              -> null
   }
 }
 
@@ -185,7 +191,10 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
     kClass.memberProperties.forEach { property ->
       val propName = property.findAnnotation<SerialName>()?.value ?: property.name
       putJsonObject(propName) {
-        val propertyType = property.returnType
+        // 同 [toJsonSchemaType] 的理由：先剝掉 nullability，否則 `List<X>?` / `Map<K,V>?`
+        // 會漏到 nested-object 分支被反射展開。是否 required 另由 [addRequiredFields] 依
+        // `isMarkedNullable` 判定，不受此處影響。
+        val propertyType = property.returnType.withNullability(false)
 
         val classifier = propertyType.classifier
         // 防禦性處理 generic / star-projection
@@ -259,7 +268,8 @@ private fun JsonObjectBuilder.handleMapType(mapType: KType, visited: MutableSet<
   }
 }
 
-private fun JsonObjectBuilder.addValueTypeSchema(valueType: KType?, visited: MutableSet<KClass<*>>) {
+private fun JsonObjectBuilder.addValueTypeSchema(nullableValueType: KType?, visited: MutableSet<KClass<*>>) {
+  val valueType = nullableValueType?.withNullability(false)
   if (valueType != null) {
     when {
       valueType.isSubtypeOf(typeOf<List<*>>()) || valueType.isSubtypeOf(typeOf<Array<*>>()) ->
@@ -281,7 +291,7 @@ private fun JsonObjectBuilder.handleCollectionType(collectionType: KType, visite
   put("type", "array")
 
   // Add items schema based on the collection element type
-  val elementType = collectionType.arguments.firstOrNull()?.type
+  val elementType = collectionType.arguments.firstOrNull()?.type?.withNullability(false)
   if (elementType != null) {
     putJsonObject("items") {
       if (elementType.toJsonSchemaType() == "object" && elementType.classifier is KClass<*>) {
