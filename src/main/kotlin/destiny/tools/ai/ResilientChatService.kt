@@ -54,7 +54,8 @@ class ResilientChatService(
       val impl = providerImpl.invoke(providerModel.provider)
       val currentChatOptions = chatOptionsTemplate.copy(
         temperature = providerModel.temperature ?: chatOptionsTemplate.temperature,
-        maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens
+        maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens,
+        thinking = providerModel.thinking ?: chatOptionsTemplate.thinking
       )
       impl.typedChatComplete(
         providerModel.model, messages, formatSpec as FormatSpec<T>, json, locale,

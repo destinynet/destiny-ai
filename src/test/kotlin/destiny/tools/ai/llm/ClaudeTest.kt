@@ -1,6 +1,10 @@
 package destiny.tools.ai.llm
 
+import com.jayway.jsonpath.DocumentContext
 import com.jayway.jsonpath.JsonPath
+import destiny.tools.ai.ChatOptions
+import destiny.tools.ai.ThinkingMode
+import destiny.tools.ai.llm.Claude.ClaudeOptions.Companion.toClaude
 import com.jayway.jsonpath.PathNotFoundException
 import mu.KotlinLogging
 import kotlinx.serialization.json.Json
@@ -234,6 +238,17 @@ class ClaudeTest {
       assertEquals(3200, usage.cacheReadInputTokens)
     }
 
+  }
+
+  /**
+   * 回應裡的 thinking block。
+   *
+   * 這一整組來自 2026-08-26 dev 環境的實際炸點（commercial partner=andy 送占星報告）：
+   * `Serializer for subclass 'thinking' is not found in the polymorphic scope of 'Content'`。
+   */
+  @Nested
+  inner class ThinkingBlockTest {
+
     /**
      * Claude 4.6 世代（sonnet-5 / opus-5 …）**省略 `thinking` 參數就等於 adaptive thinking 開啟**，
      * 與舊模型相反。所以一份沒改過的 request 只要把 model 從 `claude-haiku-4-5` 換成
@@ -313,6 +328,54 @@ class ClaudeTest {
       assertEquals("thinking", doc.read<String>("$.type"))
       assertEquals("推理…", doc.read<String>("$.thinking"))
       assertEquals("sig-abc", doc.read<String>("$.signature"))
+
+      // contentType 是 Kotlin 端的便利欄位，不該上線 —— 回送時 Anthropic 會用 signature 驗 block
+      assertFailsWith<PathNotFoundException> { doc.read<Any>("$.contentType") }
+    }
+  }
+
+  /**
+   * request 的 `thinking` 參數。
+   *
+   * 重點不在「能不能送」，而在**預設值不再是隱形的**：省略等於沿用該 model 的世代預設，
+   * 而那個預設在 4.6 世代翻了面（省略 = adaptive 開啟）。
+   */
+  @Nested
+  inner class ThinkingConfigTest {
+
+    private fun payload(mode: ThinkingMode?): DocumentContext {
+      val options = ChatOptions(thinking = mode).toClaude()
+      val chatModel = Claude.ChatModel(
+        messages = listOf(Claude.ClaudeMessage.TextContent("user", "hi")),
+        model = "claude-sonnet-5",
+        options = options,
+      )
+      return JsonPath.parse(json.encodeToString(chatModel))
+    }
+
+    @Test
+    fun `null 時 payload 完全不出現 thinking 欄位`() {
+      assertFailsWith<PathNotFoundException> { payload(null).read<Any>("$.thinking") }
+    }
+
+    @Test
+    fun `DISABLED 送出 type=disabled`() {
+      val doc = payload(ThinkingMode.DISABLED)
+      assertEquals("disabled", doc.read<String>("$.thinking.type"))
+    }
+
+    @Test
+    fun `ADAPTIVE 送出 type=adaptive 且不帶 display`() {
+      val doc = payload(ThinkingMode.ADAPTIVE)
+      assertEquals("adaptive", doc.read<String>("$.thinking.type"))
+      assertFailsWith<PathNotFoundException> { doc.read<Any>("$.thinking.display") }
+    }
+
+    @Test
+    fun `ADAPTIVE_SUMMARIZED 帶 display=summarized`() {
+      val doc = payload(ThinkingMode.ADAPTIVE_SUMMARIZED)
+      assertEquals("adaptive", doc.read<String>("$.thinking.type"))
+      assertEquals("summarized", doc.read<String>("$.thinking.display"))
     }
   }
 }

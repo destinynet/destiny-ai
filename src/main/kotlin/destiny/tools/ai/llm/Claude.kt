@@ -6,6 +6,7 @@ package destiny.tools.ai.llm
 import destiny.tools.ai.ChatOptions
 import destiny.tools.ai.IFunctionDeclaration
 import destiny.tools.ai.InputSchema
+import destiny.tools.ai.ThinkingMode
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -87,6 +88,10 @@ class Claude {
       val thinking: String = "",
       val signature: String? = null,
     ) : Content() {
+      // @Transient：不要把這個冗餘欄位送上線。`type` 已經是 discriminator，而 thinking block
+      // 回送時 Anthropic 會拿 signature 驗證 block 內容，多送欄位是不必要的風險。
+      // （既有的 Text / ToolUse / ToolResult / Image 仍會送出 contentType —— 那是既有行為，未動。）
+      @Transient
       override val contentType: String = "thinking"
     }
 
@@ -94,6 +99,7 @@ class Claude {
     @Serializable
     @SerialName("redacted_thinking")
     data class RedactedThinking(val data: String) : Content() {
+      @Transient
       override val contentType: String = "redacted_thinking"
     }
 
@@ -157,6 +163,45 @@ class Claude {
     }
   }
 
+  /**
+   * request 的 `thinking` 參數。
+   *
+   * **省略（null）不等於關閉** —— 各世代的預設不同：4.6 世代（`claude-sonnet-5`、
+   * `claude-opus-5` …）省略等於 [Adaptive]，更早的模型省略等於不思考。
+   * 想要確定的行為就明講，別靠預設。
+   *
+   * ⚠️ 送錯值會 400：[Adaptive] 只有 4.6 世代以上支援（送給 `claude-haiku-4-5` 會被拒）；
+   * 部分最新模型不接受 [Disabled]。
+   */
+  @OptIn(ExperimentalSerializationApi::class)
+  @Serializable
+  @JsonClassDiscriminator("type")
+  sealed class ThinkingConfig {
+
+    /**
+     * 由模型自行決定要不要想、想多久。
+     *
+     * @param display `omitted`（預設）思考內容為空字串但 block 仍在；`summarized` 回傳摘要。
+     *   兩者的**計費與思考量相同**，差別只在看不看得到。
+     */
+    @Serializable
+    @SerialName("adaptive")
+    data class Adaptive(val display: Display? = null) : ThinkingConfig()
+
+    @Serializable
+    @SerialName("disabled")
+    data object Disabled : ThinkingConfig()
+
+    @Serializable
+    enum class Display {
+      @SerialName("summarized")
+      SUMMARIZED,
+
+      @SerialName("omitted")
+      OMITTED,
+    }
+  }
+
   @Serializable
   data class MetaData(@SerialName("user_id") val userId: String)
 
@@ -165,6 +210,7 @@ class Claude {
     val temperature: Double? = null,  // 0 < x < 1
     val topK: Int? = null,            // > 0
     val topP: Double? = null,         // 0 < x < 1
+    val thinking: ThinkingConfig? = null,
   ) {
     companion object {
       fun ChatOptions.toClaude() : ClaudeOptions {
@@ -172,7 +218,15 @@ class Claude {
           this.temperature?.value,
           this.topK?.value,
           this.topP?.value,
+          this.thinking?.toClaude(),
         )
+      }
+
+      /** 跨 provider 的 [ThinkingMode] → Anthropic 的 wire 形狀 */
+      private fun ThinkingMode.toClaude(): ThinkingConfig = when (this) {
+        ThinkingMode.DISABLED            -> ThinkingConfig.Disabled
+        ThinkingMode.ADAPTIVE            -> ThinkingConfig.Adaptive()
+        ThinkingMode.ADAPTIVE_SUMMARIZED -> ThinkingConfig.Adaptive(ThinkingConfig.Display.SUMMARIZED)
       }
     }
   }
@@ -209,6 +263,9 @@ class Claude {
 
     @SerialName("top_p")
     val topP: Double? = options?.topP
+
+    /** null → 整個欄位不出現在 payload（`explicitNulls = false`），沿用該 model 的預設 */
+    val thinking: ThinkingConfig? = options?.thinking
   }
 
   @Serializable
