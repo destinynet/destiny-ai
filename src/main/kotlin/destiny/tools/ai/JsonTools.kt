@@ -7,13 +7,38 @@ import mu.KotlinLogging
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.*
 import kotlin.reflect.KClass
+import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
 import kotlin.reflect.full.findAnnotation
 import kotlin.reflect.full.isSubtypeOf
 import kotlin.reflect.full.memberProperties
+import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.full.starProjectedType
 import kotlin.reflect.full.withNullability
 import kotlin.reflect.typeOf
+
+/**
+ * 屬性／類別層級的 schema 說明 —— 反射進 JSON Schema 的 `description` 欄位。
+ *
+ * 動機：`toJsonSchema` 之前只有 enum 有自動 description（"Enum of X"），欄位語意
+ * 只能住在提示詞散文裡 —— 離欄位越遠，LLM 遵循度越差。掛在欄位上隨 schema 走，
+ * 語意與欄位不會分家（2026-08-26 的直接案例：`TriggerRule.baseRateTotal` 的
+ * occasion-based 語意）。
+ *
+ * 用法：
+ * ```kotlin
+ * data class Rule(
+ *   @Description("windows where the configuration was in effect (one pass = one occasion)")
+ *   val baseRateHits: Int,
+ * )
+ * ```
+ *
+ * 掛在 class 上則作為巢狀物件的 description（頂層 class 的 description 仍以
+ * [toJsonSchema] 的參數為準，參數為 null 時 fallback 到本 annotation）。
+ */
+@Target(AnnotationTarget.PROPERTY, AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Description(val value: String)
 
 fun KType.toJsonSchemaType(): String {
   // `String?` 並非 `String` 的 subtype —— 不先剝掉 nullability，所有可為 null 的
@@ -84,6 +109,21 @@ internal fun getEnumSerialName(enumClass: KClass<*>, enumValue: Any): String {
   }
 }
 
+/**
+ * 宣告序的屬性列表 —— primaryConstructor 參數順序優先，非建構子屬性（body 宣告）依字母序附於其後。
+ *
+ * [memberProperties] 本身是**字母序**。欄位順序影響 LLM 的生成順序 —— autoregressive
+ * 模型依 schema 的 properties 順序產出欄位，字母序讓「先寫對照組、結論最後寫」這類
+ * 順序要求只能靠欄位名碰巧排前面（`RetrospectiveReport.baseline` 曾經就是這樣活著的）。
+ * 改依宣告序之後，**DTO 作者排的欄位順序就是 LLM 的生成順序**，順序成為可設計的東西。
+ */
+@PublishedApi
+internal fun KClass<*>.orderedProperties(): List<KProperty1<out Any, *>> {
+  val ctorOrder: Map<String, Int> = primaryConstructor?.parameters
+    ?.mapIndexedNotNull { i, p -> p.name?.let { it to i } }?.toMap() ?: emptyMap()
+  return memberProperties.sortedWith(compareBy({ ctorOrder[it.name] ?: Int.MAX_VALUE }, { it.name }))
+}
+
 fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null): JsonSchemaSpec {
   val kType = this.starProjectedType
 
@@ -96,13 +136,16 @@ fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null):
 
   val primitiveType = effectiveType.toJsonSchemaType()
 
+  // description 參數優先；未給時 fallback 到 class 上的 @Description
+  val effectiveDescription = description ?: this.findAnnotation<Description>()?.value
+
   // 若是 primitive 型別（非 object），直接回傳 primitive schema
   if (primitiveType != "object") {
     val schema = buildJsonObject {
       put("type", primitiveType)
-      description?.let { put("description", it) }
+      effectiveDescription?.let { put("description", it) }
     }
-    return JsonSchemaSpec(name, description, schema)
+    return JsonSchemaSpec(name, effectiveDescription, schema)
   }
 
 
@@ -115,10 +158,10 @@ fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null):
       processClassProperties(this@toJsonSchema, visited)
     }
     addRequiredFields(this@toJsonSchema)
-    description?.let { put("description", it) }
+    effectiveDescription?.let { put("description", it) }
   }
 
-  return JsonSchemaSpec(name, description, schema)
+  return JsonSchemaSpec(name, effectiveDescription, schema)
 }
 
 fun unwrapValueType(kClass: KClass<*>): KType {
@@ -188,7 +231,7 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
   }
 
   try {
-    kClass.memberProperties.forEach { property ->
+    kClass.orderedProperties().forEach { property ->
       val propName = property.findAnnotation<SerialName>()?.value ?: property.name
       putJsonObject(propName) {
         // 同 [toJsonSchemaType] 的理由：先剝掉 nullability，否則 `List<X>?` / `Map<K,V>?`
@@ -220,6 +263,10 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
         else {
           putTypeAndFormat(propertyType)
         }
+
+        // 屬性層級的 @Description 最後放 —— 蓋過 handleEnumType 的 "Enum of X" 與
+        // handleObjectType 的 class 層級 description（就近者勝）
+        property.findAnnotation<Description>()?.value?.also { put("description", it) }
       }
     }
   } finally {
@@ -228,10 +275,22 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
   }
 }
 
-// Extension function to add required fields to a JsonObjectBuilder
+/**
+ * required = **非 nullable 且無預設值**。
+ *
+ * 2026-08-26 前只看 nullability：`memberProperties` 看不到預設值，於是
+ * `val tiedWith: List<String> = emptyList()` 這種欄位也被列為必填，逼 LLM 每次都吐空陣列。
+ * `primaryConstructor.parameters` 的 [kotlin.reflect.KParameter.isOptional] 看得到 ——
+ * 有預設值的欄位漏填時 kotlinx 反序列化會自動補預設，本來就不必逼。
+ * 真正的閘門欄位（如 `TriggerRule` 的四個計數）沒有預設值，不受影響。
+ * 非建構子屬性維持舊規則（非 nullable → required）。
+ */
 private fun JsonObjectBuilder.addRequiredFields(kClass: KClass<*>) {
-  val requiredProps = kClass.memberProperties
-    .filter { !it.returnType.isMarkedNullable }
+  val optionalParams: Set<String> = kClass.primaryConstructor?.parameters
+    ?.filter { it.isOptional }?.mapNotNull { it.name }?.toSet() ?: emptySet()
+
+  val requiredProps = kClass.orderedProperties()
+    .filter { !it.returnType.isMarkedNullable && it.name !in optionalParams }
     .map { it.findAnnotation<SerialName>()?.value ?: it.name }
 
   if (requiredProps.isNotEmpty()) {
@@ -301,10 +360,12 @@ private fun JsonObjectBuilder.handleCollectionType(collectionType: KType, visite
     val elementClassifier = elementType.classifier
     putJsonObject("items") {
       if (elementType.toJsonSchemaType() == "object" && elementClassifier is KClass<*>) {
-        // 檢查是否循環參照
+        // 循環參照：不展開、也不發 $ref —— 整份 schema 從不產出 definitions 區，
+        // `#/definitions/X` 是指向不存在位置的懸空指標（LLM 多半容忍，嚴格驗證器不會）。
+        // 改發一個帶說明的裸 object，讓模型知道「結構同外層的同名物件」。
         if (elementClassifier in visited) {
-          put("\$ref", "#/definitions/${elementClassifier.simpleName}")
-          put("description", "Circular reference to ${elementClassifier.simpleName}")
+          put("type", "object")
+          put("description", "Recursive ${elementClassifier.simpleName}: same structure as the enclosing ${elementClassifier.simpleName} object")
         } else {
           // It's a list of objects, detail the object structure
           put("type", "object")
@@ -342,14 +403,16 @@ private fun JsonObjectBuilder.handleEnumType(enumClass: KClass<*>) {
 
 // Handle Object type properties
 private fun JsonObjectBuilder.handleObjectType(objectClass: KClass<*>, visited: MutableSet<KClass<*>>) {
-  // 檢查是否循環參照
+  // 循環參照：同 handleCollectionType —— 不發懸空 $ref，發帶說明的裸 object
   if (objectClass in visited) {
-    put("\$ref", "#/definitions/${objectClass.simpleName}")
-    put("description", "Circular reference to ${objectClass.simpleName}")
+    put("type", "object")
+    put("description", "Recursive ${objectClass.simpleName}: same structure as the enclosing ${objectClass.simpleName} object")
     return
   }
 
   put("type", "object")
+  // class 層級的 @Description 作為巢狀物件的說明；屬性層級的 @Description 在外層後放、就近者勝
+  objectClass.findAnnotation<Description>()?.value?.also { put("description", it) }
   putJsonObject("properties") {
     processClassProperties(objectClass, visited)
   }

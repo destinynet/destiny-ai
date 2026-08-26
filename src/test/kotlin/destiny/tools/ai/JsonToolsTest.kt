@@ -474,10 +474,11 @@ class JsonToolsTest {
       assertTrue(props.containsKey("next"))
       assertEquals("string", props["value"]!!.jsonObject["type"]!!.jsonPrimitive.content)
 
-      // The 'next' property should have $ref due to circular reference
+      // 循環參照：帶說明的裸 object，不再發懸空 $ref（schema 從不產出 definitions 區）
       val nextProp = props["next"]!!.jsonObject
-      assertTrue(nextProp.containsKey("\$ref"), "Should have \$ref for circular reference")
-      assertEquals("#/definitions/Node", nextProp["\$ref"]!!.jsonPrimitive.content)
+      assertFalse(nextProp.containsKey("\$ref"), "不得發指向不存在 definitions 的 \$ref")
+      assertEquals("object", nextProp["type"]!!.jsonPrimitive.content)
+      assertTrue("Recursive Node" in nextProp["description"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -495,12 +496,13 @@ class JsonToolsTest {
       val refBProp = props["refB"]!!.jsonObject
       assertEquals("object", refBProp["type"]!!.jsonPrimitive.content)
 
-      // RefB's refA property should have $ref due to circular reference back to RefA
+      // RefB.refA 循環回 RefA：帶說明的裸 object，不再發懸空 $ref
       val refBProps = refBProp["properties"]!!.jsonObject
       assertTrue(refBProps.containsKey("refA"))
       val refAProp = refBProps["refA"]!!.jsonObject
-      assertTrue(refAProp.containsKey("\$ref"), "RefB.refA should have \$ref for circular reference")
-      assertEquals("#/definitions/RefA", refAProp["\$ref"]!!.jsonPrimitive.content)
+      assertFalse(refAProp.containsKey("\$ref"), "不得發指向不存在 definitions 的 \$ref")
+      assertEquals("object", refAProp["type"]!!.jsonPrimitive.content)
+      assertTrue("Recursive RefA" in refAProp["description"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -518,10 +520,11 @@ class JsonToolsTest {
       val childrenProp = props["children"]!!.jsonObject
       assertEquals("array", childrenProp["type"]!!.jsonPrimitive.content)
 
-      // items should have $ref due to circular reference
+      // 集合元素循環參照：同樣不發懸空 $ref
       val items = childrenProp["items"]!!.jsonObject
-      assertTrue(items.containsKey("\$ref"), "Items should have \$ref for circular reference")
-      assertEquals("#/definitions/TreeNode", items["\$ref"]!!.jsonPrimitive.content)
+      assertFalse(items.containsKey("\$ref"), "不得發指向不存在 definitions 的 \$ref")
+      assertEquals("object", items["type"]!!.jsonPrimitive.content)
+      assertTrue("Recursive TreeNode" in items["description"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -545,6 +548,125 @@ class JsonToolsTest {
       assertEquals("object", rightProp["type"]!!.jsonPrimitive.content)
       assertFalse(rightProp.containsKey("\$ref"), "right should be fully expanded, not \$ref")
       assertTrue(rightProp["properties"]!!.jsonObject.containsKey("data"))
+    }
+  }
+
+  // ========== 2026-08-26 的四項優化 ==========
+
+  /** 欄位刻意反字母序宣告 —— 字母序會排成 alpha/mango/zebra，宣告序才是 zebra/alpha/mango */
+  data class DeclOrder(val zebra: String, val alpha: Int, val mango: Boolean)
+
+  /** 建構子參數 ＋ body 屬性：body 屬性（字母序）附在建構子參數（宣告序）之後 */
+  @Suppress("unused")
+  class WithBodyProp(val zulu: String, val echo: Int) {
+    val bravo: String get() = "$zulu-$echo"
+  }
+
+  data class WithDefaults(
+    val gate: Int,                       // 無預設、非 null → required
+    val convenience: List<String> = emptyList(),  // 有預設 → not required
+    val maybe: String? = null,           // nullable → not required（舊規則不變）
+  )
+
+  data class Described(
+    @Description("windows where the configuration was in effect (one pass = one occasion)")
+    val baseRateHits: Int,
+    @Description("overrides the auto-generated enum description")
+    val status: MyEnum,
+    val plain: String,
+  )
+
+  @Description("a nested payload with its own class-level description")
+  data class DescribedNested(val data: String)
+
+  data class HasNested(
+    val nested: DescribedNested,
+    @Description("property-level wins over class-level")
+    val overridden: DescribedNested,
+  )
+
+  @Nested
+  inner class DeclarationOrderTest {
+
+    @Test
+    fun `properties follow constructor declaration order not alphabetical`() {
+      val schema = DeclOrder::class.toJsonSchema("DeclOrder").schema
+      logger.info { "schema: $schema" }
+      assertEquals(listOf("zebra", "alpha", "mango"), schema["properties"]!!.jsonObject.keys.toList(),
+        "欄位順序必須是宣告序 —— autoregressive 模型依 schema 順序生成欄位")
+      assertEquals(listOf("zebra", "alpha", "mango"),
+        schema["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+        "required 也依宣告序")
+    }
+
+    @Test
+    fun `body properties come after constructor parameters`() {
+      val schema = WithBodyProp::class.toJsonSchema("WithBodyProp").schema
+      logger.info { "schema: $schema" }
+      assertEquals(listOf("zulu", "echo", "bravo"), schema["properties"]!!.jsonObject.keys.toList(),
+        "建構子參數（宣告序）在前，body 屬性附於其後")
+    }
+  }
+
+  @Nested
+  inner class RequiredByOptionalityTest {
+
+    @Test
+    fun `params with default values are not required`() {
+      val schema = WithDefaults::class.toJsonSchema("WithDefaults").schema
+      logger.info { "schema: $schema" }
+      val required = schema["required"]!!.jsonArray.map { it.jsonPrimitive.content }
+      assertEquals(listOf("gate"), required,
+        "有預設值的欄位不必逼 LLM 填（漏填時 kotlinx 反序列化自動補預設）；nullable 維持舊規則")
+      // 欄位本身都還在 properties 裡
+      assertEquals(setOf("gate", "convenience", "maybe"), schema["properties"]!!.jsonObject.keys)
+    }
+  }
+
+  @Nested
+  inner class DescriptionAnnotationTest {
+
+    @Test
+    fun `property level Description lands in schema`() {
+      val schema = Described::class.toJsonSchema("Described").schema
+      logger.info { "schema: $schema" }
+      val props = schema["properties"]!!.jsonObject
+      assertEquals("windows where the configuration was in effect (one pass = one occasion)",
+        props["baseRateHits"]!!.jsonObject["description"]!!.jsonPrimitive.content)
+      assertFalse(props["plain"]!!.jsonObject.containsKey("description"),
+        "沒掛 annotation 的欄位不生 description")
+    }
+
+    @Test
+    fun `property Description overrides enum auto description but keeps enum values`() {
+      val schema = Described::class.toJsonSchema("Described").schema
+      val statusProp = schema["properties"]!!.jsonObject["status"]!!.jsonObject
+      assertEquals("overrides the auto-generated enum description",
+        statusProp["description"]!!.jsonPrimitive.content)
+      assertEquals(listOf("A", "B"), statusProp["enum"]!!.jsonArray.map { it.jsonPrimitive.content },
+        "值域約束必須保留 —— @Description 只換說明文字")
+    }
+
+    @Test
+    fun `class level Description describes nested objects and property level wins`() {
+      val schema = HasNested::class.toJsonSchema("HasNested").schema
+      logger.info { "schema: $schema" }
+      val props = schema["properties"]!!.jsonObject
+      assertEquals("a nested payload with its own class-level description",
+        props["nested"]!!.jsonObject["description"]!!.jsonPrimitive.content)
+      assertEquals("property-level wins over class-level",
+        props["overridden"]!!.jsonObject["description"]!!.jsonPrimitive.content,
+        "屬性層級的 @Description 蓋過 class 層級（就近者勝）")
+    }
+
+    @Test
+    fun `toJsonSchema falls back to class level Description when description param is null`() {
+      val schema = DescribedNested::class.toJsonSchema("DescribedNested").schema
+      assertEquals("a nested payload with its own class-level description",
+        schema["description"]!!.jsonPrimitive.content)
+      // 參數優先
+      val explicit = DescribedNested::class.toJsonSchema("DescribedNested", "explicit wins").schema
+      assertEquals("explicit wins", explicit["description"]!!.jsonPrimitive.content)
     }
   }
 }
