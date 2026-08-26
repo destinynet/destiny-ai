@@ -233,5 +233,86 @@ class ClaudeTest {
       assertEquals(1500, usage.cacheCreationInputTokens)
       assertEquals(3200, usage.cacheReadInputTokens)
     }
+
+    /**
+     * Claude 4.6 世代（sonnet-5 / opus-5 …）**省略 `thinking` 參數就等於 adaptive thinking 開啟**，
+     * 與舊模型相反。所以一份沒改過的 request 只要把 model 從 `claude-haiku-4-5` 換成
+     * `claude-sonnet-5`，`content[0]` 就會多出一個 thinking block。
+     *
+     * 這個 payload 是 2026-08-26 dev 環境實際炸掉的形狀（commercial partner=andy 送占星報告）：
+     * `Serializer for subclass 'thinking' is not found in the polymorphic scope of 'Content'`。
+     * `ignoreUnknownKeys` 救不了 —— 它管的是未知**欄位**，不是未知的多型**子類**。
+     */
+    @Test
+    fun `thinking block 反序列化 —— 4_6 世代預設會回這個`() {
+      val raw = """
+        {
+          "id": "msg_test",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {"type": "thinking", "thinking": "", "signature": "ErUBCkYIBRgCKkD..."},
+            {"type": "text", "text": "{\"summary\": \"...\"}"}
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0
+          }
+        }
+      """.trimIndent()
+
+      val contents = assertNotNull(json.decodeFromString<Claude.Response>(raw).contents)
+      assertEquals(2, contents.size)
+
+      val thinking = assertNotNull(contents.filterIsInstance<Claude.Content.Thinking>().firstOrNull())
+      assertEquals("", thinking.thinking, "display=omitted 時 thinking 是空字串，但 block 仍在")
+      assertEquals("ErUBCkYIBRgCKkD...", thinking.signature, "簽章要留著：tool-use 往返時必須原樣回送")
+
+      // 消費端取的是第一個 Text —— thinking 排在前面也不該干擾
+      val text = assertNotNull(contents.filterIsInstance<Claude.Content.Text>().firstOrNull())
+      assertTrue(text.text.startsWith("{"), "取到的應該是 JSON 回應而不是思考歷程")
+    }
+
+    /** `display = "summarized"` 時 thinking 有內容；另有 redacted 變體 */
+    @Test
+    fun `summarized thinking 與 redacted_thinking 都解得開`() {
+      val raw = """
+        {
+          "id": "msg_test", "type": "message", "role": "assistant", "model": "claude-opus-5",
+          "content": [
+            {"type": "thinking", "thinking": "先看四元素分佈…", "signature": "sig1"},
+            {"type": "redacted_thinking", "data": "EncryptedBlob=="},
+            {"type": "text", "text": "done"}
+          ],
+          "stop_reason": "end_turn", "stop_sequence": null,
+          "usage": {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+        }
+      """.trimIndent()
+
+      val contents = assertNotNull(json.decodeFromString<Claude.Response>(raw).contents)
+      assertEquals("先看四元素分佈…", contents.filterIsInstance<Claude.Content.Thinking>().first().thinking)
+      assertEquals("EncryptedBlob==", contents.filterIsInstance<Claude.Content.RedactedThinking>().first().data)
+    }
+
+    /**
+     * tool-use 往返會把 assistant 的 content **原樣回送**（`ClaudeImpl` 的
+     * `ClaudeMessage.ArrayContent("assistant", claudeResponse.contents!!)`）。
+     * Anthropic 要求 thinking block 連簽章一起送回，所以序列化必須 round-trip 得回去。
+     */
+    @Test
+    fun `thinking block 序列化回送時保留 type 與 signature`() {
+      val block: Claude.Content = Claude.Content.Thinking(thinking = "推理…", signature = "sig-abc")
+      val out = json.encodeToString(Claude.Content.serializer(), block)
+      val doc = JsonPath.parse(out)
+
+      assertEquals("thinking", doc.read<String>("$.type"))
+      assertEquals("推理…", doc.read<String>("$.thinking"))
+      assertEquals("sig-abc", doc.read<String>("$.signature"))
+    }
   }
 }

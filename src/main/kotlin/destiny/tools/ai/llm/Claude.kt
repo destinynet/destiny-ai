@@ -63,6 +63,40 @@ class Claude {
       val cacheControl: CacheControl? = null,
     ) : Content()
 
+    /**
+     * 模型的思考歷程。
+     *
+     * ## 為什麼會突然冒出來
+     *
+     * Claude 4.6 世代（`claude-sonnet-5`、`claude-opus-5` 等）**省略 `thinking` 參數等於
+     * adaptive thinking 開啟**——與舊模型相反（舊模型省略 = 不思考）。所以一份完全沒改過的
+     * request，只要把 model 從 `claude-haiku-4-5` 換成 `claude-sonnet-5`，回應的 `content[0]`
+     * 就會多出這個 block。少了這個 subclass，kotlinx 會丟
+     * `Serializer for subclass 'thinking' is not found in the polymorphic scope of 'Content'`
+     * ——整個回應解不開，而不只是少讀一個欄位（`ignoreUnknownKeys` 管不到多型子類）。
+     *
+     * ## 兩個欄位都要留著
+     *
+     * [thinking] 在 `display = "omitted"`（4.6 世代的預設）時是空字串——block 仍然存在。
+     * [signature] 是 Anthropic 的驗證用簽章：在 tool-use 往返裡把 assistant 的 content
+     * 原樣回送時，**必須連簽章一起送回**，否則 API 會拒絕。
+     */
+    @Serializable
+    @SerialName("thinking")
+    data class Thinking(
+      val thinking: String = "",
+      val signature: String? = null,
+    ) : Content() {
+      override val contentType: String = "thinking"
+    }
+
+    /** 被遮蔽的思考歷程（內容加密，原樣回送即可） */
+    @Serializable
+    @SerialName("redacted_thinking")
+    data class RedactedThinking(val data: String) : Content() {
+      override val contentType: String = "redacted_thinking"
+    }
+
     @Serializable
     @SerialName("tool_use")
     data class ToolUse(override val contentType: String = "tool_use", val id: String, val name: String, val input: JsonElement) : Content()
