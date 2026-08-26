@@ -82,9 +82,22 @@ class Claude {
      * [signature] 是 Anthropic 的驗證用簽章：在 tool-use 往返裡把 assistant 的 content
      * 原樣回送時，**必須連簽章一起送回**，否則 API 會拒絕。
      */
+    @OptIn(ExperimentalSerializationApi::class)
     @Serializable
     @SerialName("thinking")
     data class Thinking(
+      /**
+       * `@EncodeDefault` 是必要的，不是裝飾。
+       *
+       * [ClaudeMessageSerializer] 送出 `ArrayContent` 時用的是 **`Json` companion 的預設實例**
+       * （`Json.encodeToJsonElement`），不是 `ClaudeImpl` 那個 `encodeDefaults = true` 的設定 ——
+       * 所以任何「等於預設值」的欄位都會被省略。`display = omitted`（4.6 世代預設）時
+       * thinking 剛好就是空字串，於是回送的 block 少了這個欄位，Anthropic 回
+       * `messages.N.content.0.thinking.thinking: Field required` 而整個 tool-use 往返失敗。
+       *
+       * 2026-08-26 由 `ClaudeImpl_Sonnet5_Test` 的 function call 測試實跑抓到。
+       */
+      @EncodeDefault
       val thinking: String = "",
       val signature: String? = null,
     ) : Content() {

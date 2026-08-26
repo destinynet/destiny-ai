@@ -21,6 +21,20 @@ data class ModelInfo(
   @Serializable(with = YearMonthSerializer::class)
   val knowledgeCutoff: YearMonth? = null,
   val capabilities: Set<Capability> = emptySet(),
+  /**
+   * 是否接受 sampling 參數（`temperature` / `top_p` / `top_k`）。
+   *
+   * 預設 `true` —— 只有已知會拒收的 model 才標 `false`，這樣既有登記不必動。
+   *
+   * 為什麼是「sampling」而不是只有 temperature：Claude 4.6 世代把**三個一起**移除了，
+   * 只擋 temperature 的話，帶 `top_p` 照樣 400
+   * （`` `temperature` is deprecated for this model. ``，2026-08-26 對 claude-sonnet-5 實測）。
+   * OpenAI 的 reasoning 系列也是同一種情況，所以這個欄位放在跨 provider 的 [ModelInfo] 上。
+   *
+   * 由 [destiny.tools.ai.IChatCompletion.resolveSampling] 統一套用：不吃就拿掉並 warn，
+   * 而不是讓請求送出去撞 400 —— 與 `resolveMaxTokens` 的 clamp + warn 同一個慣例。
+   */
+  val samplingEnabled: Boolean = true,
   val deprecated: Boolean = false,
 )
 

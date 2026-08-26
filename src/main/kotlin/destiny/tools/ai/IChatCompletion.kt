@@ -290,6 +290,28 @@ abstract class AbstractChatCompletion : IChatCompletion {
    *        （OpenAI / XiaoMi / Groq / Reka）；Claude / Mistral 這類上限遠高於一般所需的，
    *        則傳一個較低的常數當預設。
    */
+  /**
+   * 依 [ModelInfo.samplingEnabled] 決定要不要把 sampling 參數拿掉。
+   *
+   * 不吃這些參數的 model（Claude 4.6 世代、OpenAI reasoning 系列）收到就回 400，
+   * 而錯誤訊息不會告訴呼叫端「是哪一份設定帶進來的」。與其讓它撞牆，不如在這裡拿掉並 warn ——
+   * 與 [resolveMaxTokens] 的 clamp + warn 同一個慣例。
+   *
+   * 這麼做的好處是**沒有任何 caller 需要知道這件事**：`domain-model-config.json` 裡那些
+   * `"CLAUDE : xxx, 0.2"` 的設定，換到新世代 model 時不會突然全面失效。
+   */
+  protected fun resolveSampling(model: String, chatOptions: ChatOptions): ChatOptions {
+    if (findModelInfo(model)?.samplingEnabled != false) return chatOptions
+    val dropped = buildList {
+      chatOptions.temperature?.let { add("temperature=${it.value}") }
+      chatOptions.topP?.let { add("topP=${it.value}") }
+      chatOptions.topK?.let { add("topK=${it.value}") }
+    }
+    if (dropped.isEmpty()) return chatOptions
+    logger.warn { "$provider: $model 不接受 sampling 參數，已忽略 ${dropped.joinToString(", ")}" }
+    return chatOptions.copy(temperature = null, topP = null, topK = null)
+  }
+
   protected fun resolveMaxTokens(model: String, chatOptions: ChatOptions, providerDefault: Int? = null): Int? {
     val ceiling = findModelInfo(model)?.maxOutputTokens
     val requested = chatOptions.maxTokens?.value ?: providerDefault ?: ceiling ?: return null

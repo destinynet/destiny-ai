@@ -332,6 +332,28 @@ class ClaudeTest {
       // contentType 是 Kotlin 端的便利欄位，不該上線 —— 回送時 Anthropic 會用 signature 驗 block
       assertFailsWith<PathNotFoundException> { doc.read<Any>("$.contentType") }
     }
+
+    /**
+     * ⚠️ 回送路徑用的是 **`Json` companion 的預設實例**，不是 `ClaudeImpl` 那個
+     * `encodeDefaults = true` 的設定 —— 見 `ClaudeMessageSerializer` 的
+     * `Json.encodeToJsonElement(value.content)`。
+     *
+     * 所以「等於預設值」的欄位會被省略。`display = omitted`（4.6 世代預設）時 thinking
+     * 剛好就是空字串，少了 `@EncodeDefault` 的話回送的 block 就沒有這個欄位，Anthropic 回
+     * `messages.N.content.0.thinking.thinking: Field required`，整個 tool-use 往返失敗。
+     *
+     * 這條測試刻意用 bare `Json` 而非本檔的 `json`，因為要複製的是**壞掉的那條路徑**。
+     * 用設定過的實例測，它永遠是綠的，也就永遠抓不到這個問題。
+     */
+    @Test
+    fun `空字串的 thinking 在 bare Json 下仍須送出`() {
+      val block: Claude.Content = Claude.Content.Thinking(thinking = "", signature = "sig")
+      val out = Json.encodeToJsonElement(Claude.Content.serializer(), block).toString()
+      val doc = JsonPath.parse(out)
+
+      assertEquals("", doc.read<String>("$.thinking"), "空字串被省略了 —— Anthropic 會拒收")
+      assertEquals("sig", doc.read<String>("$.signature"))
+    }
   }
 
   /**
