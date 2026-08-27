@@ -4,6 +4,7 @@
 package destiny.tools.ai.llm
 
 import destiny.tools.ai.IFunctionDeclaration
+import destiny.tools.ai.isNumericJsonType
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -176,7 +177,13 @@ class Gemini {
     @Serializable
     data class Parameters(val type: String, val properties: Map<String, Argument>, val required: List<String>) {
       @Serializable
-      data class Argument(val type: String, val description: String, val enum: List<String>? = null)
+      data class Argument(
+        val type: String,
+        val description: String,
+        val enum: List<String>? = null,
+        val minimum: Int? = null,
+        val maximum: Int? = null,
+      )
     }
   }
 
@@ -241,7 +248,12 @@ fun IFunctionDeclaration.toGemini(): Gemini.FunctionDeclaration {
     Gemini.FunctionDeclaration.Parameters(
       "object",
       this.parameters.associate { p ->
-        p.name to Gemini.FunctionDeclaration.Parameters.Argument(p.type, p.description, p.enum.ifEmpty { null })
+        // 規則與 `toInputSchema()` 一致：空 enum 送 null、界限只掛在數值型別上
+        val numeric = p.type.isNumericJsonType()
+        p.name to Gemini.FunctionDeclaration.Parameters.Argument(
+          p.type, p.description, p.enum.ifEmpty { null },
+          p.minimum.takeIf { numeric }, p.maximum.takeIf { numeric },
+        )
       },
       this.parameters.filter { it.required }.map { it.name }.toList()
     )
