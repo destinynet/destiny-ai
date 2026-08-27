@@ -179,7 +179,7 @@ class Gemini {
       @Serializable
       data class Argument(
         val type: String,
-        val description: String,
+        val description: String? = null,
         val enum: List<String>? = null,
         val minimum: Int? = null,
         val maximum: Int? = null,
@@ -253,7 +253,7 @@ private fun IFunctionDeclaration.Parameter.toGeminiArgument(): Gemini.FunctionDe
   return if (type == "array" && itemType != null) {
     Gemini.FunctionDeclaration.Parameters.Argument(
       type, description,
-      items = Gemini.FunctionDeclaration.Parameters.Argument(itemType, "", closedValues),
+      items = Gemini.FunctionDeclaration.Parameters.Argument(itemType, enum = closedValues),
     )
   } else {
     val numeric = type.isNumericJsonType()

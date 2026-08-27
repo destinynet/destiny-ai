@@ -244,6 +244,17 @@ class FunctionDeclarationSchemaTest {
   }
 
   @Test
+  fun `items schema carries no empty description`() {
+    // 空字串比省略更糟 —— 模型會讀到一個沒有內容的欄位。說明文字屬於參數本身。
+    val ctx = JsonPath.parse(json.encodeToString(decl.toClaude()))
+    assertEquals(
+      setOf("type", "enum"),
+      ctx.read<Map<String, Any>>("$.input_schema.properties.aspects.items").keys,
+    )
+    assertEquals(setOf("type"), ctx.read<Map<String, Any>>("$.input_schema.properties.points.items").keys)
+  }
+
+  @Test
   fun `array wire format carries items`() {
     val ctx = JsonPath.parse(json.encodeToString(decl.toClaude()))
     val base = "$.input_schema.properties.aspects"

@@ -7,7 +7,8 @@ data class InputSchema(val type: String = "object", val properties: Map<String, 
   @Serializable
   data class Property(
     val type: String,
-    val description: String,
+    /** items schema 用不到說明文字（那屬於參數本身），留 null 讓欄位整個消失 */
+    val description: String? = null,
     val enum: List<String>? = null,
     val minimum: Int? = null,
     val maximum: Int? = null,
@@ -38,7 +39,7 @@ private fun IFunctionDeclaration.Parameter.toProperty(): InputSchema.Property {
   return if (type == "array" && itemType != null) {
     InputSchema.Property(
       type, description,
-      items = InputSchema.Property(itemType, "", closedValues),
+      items = InputSchema.Property(itemType, enum = closedValues),
     )
   } else {
     val numeric = type.isNumericJsonType()
