@@ -57,7 +57,12 @@ class FunctionDeclarationSchemaTest {
       // 界限掛在字串上是宣告端的錯 —— 必須被丟棄，不可汙染送出的 schema
       @Parameter("Bounds on a string are meaningless", required = false, minimum = 1, maximum = 5)
       label: String,
-    ): String = "ok"
+      // 陣列參數：enum 屬於「元素」，不屬於參數自己
+      @Parameter("Aspects, OR-ed", required = false, enum = ["CONJUNCTION", "SQUARE", "TRINE"])
+      aspects: List<String>?,
+      @Parameter("Free-vocabulary list", required = false)
+      points: List<String>?,
+    ): String = "invoked:" + (aspects?.joinToString("|") ?: "-") + "/" + (points?.joinToString("|") ?: "-")
   }
 
   private val decl: IFunctionDeclaration = SampleCall()
@@ -201,5 +206,81 @@ class FunctionDeclarationSchemaTest {
     assertEquals(1, ctx.read("$base.windowMonths.minimum", Int::class.java))
     assertEquals(12, ctx.read("$base.windowMonths.maximum", Int::class.java))
     assertEquals(setOf("type", "description"), ctx.read<Map<String, Any>>("$base.note").keys)
+  }
+
+  // ── 第四段：陣列參數（最小版 array-of-scalar 支援）───────────────────
+  //
+  // ⭐ 陣列參數的 enum 落在 items 裡。同一個 @Parameter(enum = [...]) 宣告，
+  //    掛在 List<String> 上與掛在 String 上，落到 schema 的位置不同。
+
+  @Test
+  fun `list parameter reports array type and item type`() {
+    assertEquals("array", paramOf("aspects").type)
+    assertEquals("string", paramOf("aspects").itemType)
+    assertNull(paramOf("group").itemType)          // 純量參數沒有 itemType
+  }
+
+  @Test
+  fun `list parameter enum lands on items, not on the property`() {
+    val p = decl.toClaude().inputSchema.properties.getValue("aspects")
+    assertNull(p.enum)
+    assertEquals(listOf("CONJUNCTION", "SQUARE", "TRINE"), p.items?.enum)
+    assertEquals("string", p.items?.type)
+  }
+
+  @Test
+  fun `list parameter without enum still declares items type`() {
+    val p = decl.toOpenAi().function.parameters.properties.getValue("points")
+    assertEquals("array", p.type)
+    assertEquals("string", p.items?.type)
+    assertNull(p.items?.enum)
+  }
+
+  @Test
+  fun `gemini list parameter mirrors the same shape`() {
+    val p = decl.toGemini().parameters.properties.getValue("aspects")
+    assertNull(p.enum)
+    assertEquals(listOf("CONJUNCTION", "SQUARE", "TRINE"), p.items?.enum)
+  }
+
+  @Test
+  fun `array wire format carries items`() {
+    val ctx = JsonPath.parse(json.encodeToString(decl.toClaude()))
+    val base = "$.input_schema.properties.aspects"
+    assertEquals("array", ctx.read("$base.type", String::class.java))
+    assertEquals("string", ctx.read("$base.items.type", String::class.java))
+    assertEquals(listOf("CONJUNCTION", "SQUARE", "TRINE"), ctx.read("$base.items.enum", List::class.java))
+    // 參數自己不該有 enum
+    assertTrue(ctx.read<Map<String, Any>>(base).keys.none { it == "enum" })
+  }
+
+  // ── 第五段：值真的打得回 callback 嗎 ────────────────────────────────
+  //
+  // ⚠️ 這一格才是 array 支援真正的底線。它依賴 destiny-core 的
+  //    JsonElement.toAny() 遞迴修正 —— 在那之前 ["A","B"] 會變成 [{}, {}]，
+  //    此處會拿到一串空 Map 而非字串。
+
+  @Test
+  fun `invoke round-trips a string array into the callback`() {
+    // 這裡只驗 invoke() 這一半 —— 從 JSON 字串出發的完整鏈路測試在
+    // destiny-core-impl（`JsonElement.toMap()` 在那個模組才看得到）。
+    val result = decl.invoke(
+      mapOf(
+        "group" to "HIGH", "note" to "n", "windowMonths" to 1, "offset" to 0, "label" to "l",
+        "aspects" to listOf("CONJUNCTION", "SQUARE"),
+        "points" to listOf("Moon"),
+      )
+    )
+    assertEquals("invoked:CONJUNCTION|SQUARE/Moon", result)
+  }
+
+  @Test
+  fun `invoke tolerates an omitted nullable list`() {
+    // required = false 的參數必須宣告成可空型別 —— invoke() 用 call 而非 callBy，
+    // 缺席時塞進去的是 null（見 funcall-typed-parameters 的缺陷 C）
+    val result = decl.invoke(
+      mapOf("group" to "HIGH", "note" to "n", "windowMonths" to 1, "offset" to 0, "label" to "l")
+    )
+    assertEquals("invoked:-/-", result)
   }
 }

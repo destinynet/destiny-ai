@@ -183,6 +183,8 @@ class Gemini {
         val enum: List<String>? = null,
         val minimum: Int? = null,
         val maximum: Int? = null,
+        /** `type == "array"` 時的元素 schema。只支援一層 array-of-scalar */
+        val items: Argument? = null,
       )
     }
   }
@@ -241,20 +243,34 @@ class Gemini {
   }
 }
 
+/**
+ * ⚠️ Gemini 的 `Argument` 與其他 provider 共用的 `InputSchema.Property` 是兩個型別，
+ * 這裡的三條規則必須與 `toInputSchema()` 逐條對齊：空 enum 送 null、
+ * 界限只掛數值型別、陣列的 enum 落在 `items` 裡。
+ */
+private fun IFunctionDeclaration.Parameter.toGeminiArgument(): Gemini.FunctionDeclaration.Parameters.Argument {
+  val closedValues = enum.ifEmpty { null }
+  return if (type == "array" && itemType != null) {
+    Gemini.FunctionDeclaration.Parameters.Argument(
+      type, description,
+      items = Gemini.FunctionDeclaration.Parameters.Argument(itemType, "", closedValues),
+    )
+  } else {
+    val numeric = type.isNumericJsonType()
+    Gemini.FunctionDeclaration.Parameters.Argument(
+      type, description, closedValues,
+      minimum.takeIf { numeric }, maximum.takeIf { numeric },
+    )
+  }
+}
+
 fun IFunctionDeclaration.toGemini(): Gemini.FunctionDeclaration {
   return Gemini.FunctionDeclaration(
     this.name,
     this.description,
     Gemini.FunctionDeclaration.Parameters(
       "object",
-      this.parameters.associate { p ->
-        // 規則與 `toInputSchema()` 一致：空 enum 送 null、界限只掛在數值型別上
-        val numeric = p.type.isNumericJsonType()
-        p.name to Gemini.FunctionDeclaration.Parameters.Argument(
-          p.type, p.description, p.enum.ifEmpty { null },
-          p.minimum.takeIf { numeric }, p.maximum.takeIf { numeric },
-        )
-      },
+      this.parameters.associate { p -> p.name to p.toGeminiArgument() },
       this.parameters.filter { it.required }.map { it.name }.toList()
     )
   )

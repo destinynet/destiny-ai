@@ -33,6 +33,16 @@ interface IFunctionDeclaration {
     val enum: List<String> = emptyList(),
     val minimum: Int? = null,
     val maximum: Int? = null,
+    /**
+     * [type] == `"array"` 時的元素型別；其餘情況為 null。
+     *
+     * ⭐ **[enum] 的歸屬由型別決定**：陣列參數的 enum 是**元素**的值域（`items.enum`），
+     * 純量參數的 enum 才是它自己的值域。同一個 `@Parameter(enum = [...])` 宣告，
+     * 掛在 `List<String>` 上與掛在 `String` 上，落到 schema 的位置不同。
+     * 這讓「OR 一組封閉詞彙」（`aspects = [OPPOSITION, TRINE]`）表達得出來，
+     * 又不必新增第二個 annotation 欄位。
+     */
+    val itemType: String? = null,
   )
 
   val name: String
@@ -87,6 +97,7 @@ abstract class AnnotatedFunctionDeclaration : IFunctionDeclaration {
           annotation?.enum?.toList() ?: emptyList(),
           annotation?.minimum?.takeIf { it != Int.MIN_VALUE },
           annotation?.maximum?.takeIf { it != Int.MAX_VALUE },
+          param.type.toJsonSchemaItemType(),
         )
       }
     }

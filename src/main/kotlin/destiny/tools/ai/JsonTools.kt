@@ -69,6 +69,23 @@ fun KType.toJsonSchemaType(): String {
 }
 
 /**
+ * 陣列參數的**元素**型別；非陣列（或取不到型別參數）回 null。
+ *
+ * 只解一層 —— `List<String>` / `Array<Int>` 這種 array-of-scalar 就是 funCall 參數的
+ * 實際需求上限。巢狀陣列與 array-of-object 刻意不支援：真的需要時應該改用巢狀
+ * 物件參數，而不是把 schema 產生器擴成通用的樹。
+ *
+ * ⚠️ 沒有這個函式的話，[toJsonSchemaType] 對 `List<String>` 只會回 `"array"`，
+ * 送出去的 schema 就沒有 `items` —— 模型拿不到元素型別提示，也無法對元素下 enum 約束。
+ */
+fun KType.toJsonSchemaItemType(): String? {
+  val t = this.withNullability(false)
+  if (!t.isSubtypeOf(typeOf<List<*>>()) && !t.isSubtypeOf(typeOf<Array<*>>())) return null
+  val arg = t.arguments.firstOrNull()?.type ?: return null
+  return arg.toJsonSchemaType()
+}
+
+/**
  * 取得 JSON Schema 的 format 欄位值 (用於日期/時間類型)
  * @return format 字串，若非日期類型則回傳 null
  */
