@@ -5,6 +5,7 @@ import destiny.tools.ai.IFunctionDeclaration
 import destiny.tools.ai.InputSchema
 import destiny.tools.ai.JsonSchemaSpec
 import destiny.tools.ai.model.ResponseFormat
+import destiny.tools.ai.toInputSchema
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -213,11 +214,7 @@ fun IFunctionDeclaration.toOpenAi(): OpenAi.FunctionDeclaration {
     "function",
     OpenAi.FunctionDeclaration.Function(
       this.name, this.description,
-      InputSchema(
-        "object",
-        this.parameters.associate { p -> p.name to InputSchema.Property(p.type, p.description, null) },
-        this.parameters.filter { it.required }.map { it.name }.toList()
-      )
+      this.parameters.toInputSchema()
     )
   )
 }

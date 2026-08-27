@@ -6,6 +6,7 @@ package destiny.tools.ai.llm
 import destiny.tools.ai.ChatOptions
 import destiny.tools.ai.IFunctionDeclaration
 import destiny.tools.ai.InputSchema
+import destiny.tools.ai.toInputSchema
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
@@ -105,16 +106,7 @@ fun IFunctionDeclaration.toCohere(): Cohere.ToolFunction {
     Cohere.ToolFunction.Function(
       this.name,
       this.description,
-      InputSchema(
-        "object",
-        this.parameters.associate { p ->
-          p.name to InputSchema.Property(
-            p.type,
-            p.description
-          )
-        },
-        this.parameters.filter { it.required }.map { it.name }
-      )
+      this.parameters.toInputSchema()
     )
   )
 }

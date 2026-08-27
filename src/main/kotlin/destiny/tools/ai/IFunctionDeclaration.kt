@@ -8,7 +8,22 @@ import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.full.valueParameters
 
 interface IFunctionDeclaration {
-  data class Parameter(val name: String, val type: String, val description: String, val required: Boolean)
+  /**
+   * @param enum 允許值的封閉清單；空 list 代表不限制。
+   *
+   * ⚠️ 2026-08-27 新增。此前 [Parameter] 沒有這個欄位，於是
+   * `@Parameter(enum = [...])` 讀出來就被丟棄，**從未送達任何 provider** ——
+   * 各家的 schema 型別（`InputSchema.Property` 等）明明都有 enum 欄位，
+   * 卻永遠是 null。既有宣告（如 `["M", "F"]`）之所以看似有效，
+   * 純粹是因為同一份清單在 `description` 裡又寫了一遍。
+   */
+  data class Parameter(
+    val name: String,
+    val type: String,
+    val description: String,
+    val required: Boolean,
+    val enum: List<String> = emptyList(),
+  )
 
   val name: String
   val description: String
@@ -58,7 +73,8 @@ abstract class AnnotatedFunctionDeclaration : IFunctionDeclaration {
           param.name ?: "",
           param.type.toJsonSchemaType(),
           annotation?.description ?: "",
-          annotation?.required ?: true
+          annotation?.required ?: true,
+          annotation?.enum?.toList() ?: emptyList(),
         )
       }
     }

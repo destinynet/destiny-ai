@@ -7,6 +7,7 @@ import destiny.tools.ai.ChatOptions
 import destiny.tools.ai.IFunctionDeclaration
 import destiny.tools.ai.InputSchema
 import destiny.tools.ai.ThinkingMode
+import destiny.tools.ai.toInputSchema
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -317,15 +318,6 @@ fun IFunctionDeclaration.toClaude(): Claude.Function {
   return Claude.Function(
     this.name,
     this.description,
-    InputSchema(
-      "object",
-      this.parameters.associate { p ->
-        p.name to InputSchema.Property(
-          p.type,
-          p.description
-        )
-      },
-      this.parameters.filter { it.required }.map { it.name }
-    )
+    this.parameters.toInputSchema()
   )
 }

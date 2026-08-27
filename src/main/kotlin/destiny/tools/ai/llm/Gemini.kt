@@ -176,7 +176,7 @@ class Gemini {
     @Serializable
     data class Parameters(val type: String, val properties: Map<String, Argument>, val required: List<String>) {
       @Serializable
-      data class Argument(val type: String, val description: String)
+      data class Argument(val type: String, val description: String, val enum: List<String>? = null)
     }
   }
 
@@ -240,7 +240,9 @@ fun IFunctionDeclaration.toGemini(): Gemini.FunctionDeclaration {
     this.description,
     Gemini.FunctionDeclaration.Parameters(
       "object",
-      this.parameters.associate { p -> p.name to Gemini.FunctionDeclaration.Parameters.Argument(p.type, p.description) },
+      this.parameters.associate { p ->
+        p.name to Gemini.FunctionDeclaration.Parameters.Argument(p.type, p.description, p.enum.ifEmpty { null })
+      },
       this.parameters.filter { it.required }.map { it.name }.toList()
     )
   )
