@@ -64,6 +64,13 @@ class FunctionDeclarationSchemaTest {
       aspects: List<String>?,
       @Parameter("Free-vocabulary list", required = false)
       points: List<String>?,
+      // 數值陣列：界限同樣屬於「元素」—— 掛在陣列自己身上時 minimum 的語意是「數值下限」，
+      // 對陣列無意義（長度限制是 minItems），validator 忽略而模型被誤導
+      @Parameter("Houses, OR-ed", required = false, minimum = 1, maximum = 12)
+      houses: List<Int>?,
+      // 界限掛在字串陣列上同樣是宣告端的錯，必須被丟棄
+      @Parameter("Bounds on a string list are meaningless", required = false, minimum = 1, maximum = 9)
+      tags: List<String>?,
       @Parameter("A double that the model will happily send as an integer", required = false)
       orb: Double?,
     ): String = "invoked:" + (aspects?.joinToString("|") ?: "-") + "/" + (points?.joinToString("|") ?: "-") +
@@ -239,6 +246,27 @@ class FunctionDeclarationSchemaTest {
     assertEquals("array", p.type)
     assertEquals("string", p.items?.type)
     assertNull(p.items?.enum)
+  }
+
+  // ⭐ 2026-08-28：陣列參數的 minimum/maximum 曾與 enum 犯同一個錯 —— 宣告了卻從未送達。
+  //    `houses: List<Int>?` 帶 minimum=1/maximum=12，schema 裡 items 卻只有 {"type":"integer"}。
+  @Test
+  fun `numeric list parameter carries bounds on items, not on the property`() {
+    val p = decl.toOpenAi().function.parameters.properties.getValue("houses")
+    assertEquals("array", p.type)
+    assertNull(p.minimum, "界限不該掛在陣列自己身上 —— 那是數值下限的語意，對陣列無意義")
+    assertNull(p.maximum)
+    assertEquals("integer", p.items?.type)
+    assertEquals(1, p.items?.minimum)
+    assertEquals(12, p.items?.maximum)
+  }
+
+  @Test
+  fun `bounds declared on a string list are dropped everywhere`() {
+    val p = decl.toOpenAi().function.parameters.properties.getValue("tags")
+    assertNull(p.minimum); assertNull(p.maximum)
+    assertNull(p.items?.minimum, "字串元素的界限必須丟棄，否則汙染送出的 schema")
+    assertNull(p.items?.maximum)
   }
 
   @Test
