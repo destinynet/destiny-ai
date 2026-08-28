@@ -13,8 +13,10 @@ import destiny.tools.ai.llm.toOpenAi
 import destiny.tools.ai.llm.toXai
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
+import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -62,7 +64,10 @@ class FunctionDeclarationSchemaTest {
       aspects: List<String>?,
       @Parameter("Free-vocabulary list", required = false)
       points: List<String>?,
-    ): String = "invoked:" + (aspects?.joinToString("|") ?: "-") + "/" + (points?.joinToString("|") ?: "-")
+      @Parameter("A double that the model will happily send as an integer", required = false)
+      orb: Double?,
+    ): String = "invoked:" + (aspects?.joinToString("|") ?: "-") + "/" + (points?.joinToString("|") ?: "-") +
+      (orb?.let { "/orb=$it" } ?: "")
   }
 
   private val decl: IFunctionDeclaration = SampleCall()
@@ -293,5 +298,39 @@ class FunctionDeclarationSchemaTest {
       mapOf("group" to "HIGH", "note" to "n", "windowMonths" to 1, "offset" to 0, "label" to "l")
     )
     assertEquals("invoked:-/-", result)
+  }
+
+  // ── invoke() 的型別轉換 ────────────────────────────────────────────
+
+  @Test
+  fun `an integer sent to a Double parameter is coerced, not rejected`() {
+    // ⚠️ 模型會送 `3` 給一個 Double 參數（JSON 的 3 解出來是 Int），而 reflection 的
+    //    call 會直接丟 argument type mismatch —— 使用者只看到工具無緣無故失敗。
+    //    2026-08-28 在 count_eclipses 的 maxOrb 上實際踩到。
+    val result = decl.invoke(
+      mapOf("group" to "HIGH", "note" to "n", "windowMonths" to 1, "offset" to 0, "label" to "l",
+            "orb" to 3)
+    )
+    assertContains(result, "orb=3.0")
+  }
+
+  @Test
+  fun `a double is accepted for a Double parameter unchanged`() {
+    val result = decl.invoke(
+      mapOf("group" to "HIGH", "note" to "n", "windowMonths" to 1, "offset" to 0, "label" to "l",
+            "orb" to 2.5)
+    )
+    assertContains(result, "orb=2.5")
+  }
+
+  @Test
+  fun `a non-integral value for an Int parameter fails loudly, not silently truncated`() {
+    // 靜默的 3.7 → 3 比失敗更難查
+    val e = assertFailsWith<IllegalArgumentException> {
+      decl.invoke(
+        mapOf("group" to "HIGH", "note" to "n", "windowMonths" to 3.7, "offset" to 0, "label" to "l")
+      )
+    }
+    assertContains(e.message ?: "", "integer")
   }
 }

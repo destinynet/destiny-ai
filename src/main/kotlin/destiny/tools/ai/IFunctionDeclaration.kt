@@ -3,7 +3,10 @@
  */
 package destiny.tools.ai
 
+import kotlin.reflect.KClass
+import kotlin.reflect.KType
 import kotlin.reflect.full.findAnnotation
+import kotlin.reflect.full.withNullability
 import kotlin.reflect.full.memberFunctions
 import kotlin.reflect.full.valueParameters
 
@@ -105,9 +108,49 @@ abstract class AnnotatedFunctionDeclaration : IFunctionDeclaration {
   override fun invoke(parameters: Map<String, Any>): String {
     val method = this::class.memberFunctions.first { it.name == callbackName }
     val args = method.valueParameters.map { param ->
-      parameters[param.name]
+      parameters[param.name]?.let { coerce(it, param.type) }
     }.toTypedArray()
     return method.call(this, *args) as String
+  }
+
+  /**
+   * JSON 值 → callback 參數型別的最小轉換。
+   *
+   * ⚠️ **模型會送 `3` 給一個 `Double` 參數**，而 JSON 的 `3` 解出來是 `Int`，
+   * reflection 的 `call` 直接丟 `IllegalArgumentException: argument type mismatch` ——
+   * 使用者只會看到工具無緣無故失敗。2026-08-28 在 `count_eclipses` 的 `maxOrb` 上實際踩到。
+   *
+   * 只處理數值與 enum：`List<T>` 靠泛型抹除本來就過得去（元素若是 String），
+   * 而更完整的處置（`call` → `callBy`，讓缺席的參數落回 Kotlin 預設值）
+   * 見 root `docs/plans/2026-08-27-funcall-typed-parameters.md` 的 §3。
+   *
+   * **非整數值要轉成 Int 時報錯，不默默截斷** —— 靜默的 3.7 → 3 比失敗更難查。
+   */
+  private fun coerce(value: Any, type: KType): Any {
+    val t = type.withNullability(false)
+    if (value is Number) {
+      return when (t.classifier) {
+        Double::class -> value.toDouble()
+        Float::class  -> value.toFloat()
+        Int::class, Long::class -> {
+          val d = value.toDouble()
+          require(d == Math.floor(d)) { "expected an integer but got $value" }
+          if (t.classifier == Int::class) value.toInt() else value.toLong()
+        }
+        else -> value
+      }
+    }
+    @Suppress("UNCHECKED_CAST")
+    if (value is String) {
+      val cls = t.classifier as? KClass<*>
+      if (cls != null && cls.java.isEnum) {
+        return cls.java.enumConstants.firstOrNull { (it as Enum<*>).name.equals(value, true) }
+          ?: throw IllegalArgumentException(
+            "\"$value\" is not one of ${cls.java.enumConstants.joinToString("/") { (it as Enum<*>).name }}"
+          )
+      }
+    }
+    return value
   }
 }
 
