@@ -669,4 +669,60 @@ class JsonToolsTest {
       assertEquals("explicit wins", explicit["description"]!!.jsonPrimitive.content)
     }
   }
+
+  /**
+   * [Size] —— 集合長度限制進 schema。
+   *
+   * 存在的理由是一次實測：契約的 KDoc 寫著「2~4 條」，而既有產出的 199 個窗裡
+   * 140 個（70%）超過 4 條。散文限制與沒有限制的差別，只在人以為有。
+   */
+  @kotlinx.serialization.Serializable
+  data class Sized(
+    @Size(2, 4) val watchFor: List<String>,
+    @Size(min = 3) val atLeastThree: List<String>,
+    @Size(max = 5) val atMostFive: List<String>,
+    val unbounded: List<String>,
+    /** 掛在非集合欄位上必須被靜默忽略 —— 不能讓 schema 長出無意義的 minItems */
+    @Size(1, 2) val notACollection: String,
+  )
+
+  @Nested
+  inner class SizeTest {
+
+    private val props = Sized::class.toJsonSchema("Sized").schema["properties"]!!.jsonObject
+
+    @Test
+    fun `min 與 max 都出現在 schema 裡`() {
+      val w = props["watchFor"]!!.jsonObject
+      assertEquals(2, w["minItems"]!!.jsonPrimitive.content.toInt())
+      assertEquals(4, w["maxItems"]!!.jsonPrimitive.content.toInt())
+      assertEquals("array", w["type"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `只給一邊時只出現那一邊`() {
+      val lo = props["atLeastThree"]!!.jsonObject
+      assertEquals(3, lo["minItems"]!!.jsonPrimitive.content.toInt())
+      assertFalse(lo.containsKey("maxItems"))
+      val hi = props["atMostFive"]!!.jsonObject
+      assertEquals(5, hi["maxItems"]!!.jsonPrimitive.content.toInt())
+      assertFalse(hi.containsKey("minItems"))
+    }
+
+    @Test
+    fun `沒掛 annotation 的集合不受影響`() {
+      val u = props["unbounded"]!!.jsonObject
+      assertFalse(u.containsKey("minItems"))
+      assertFalse(u.containsKey("maxItems"))
+    }
+
+    /** 掛錯地方要靜默忽略：長出一個 minItems 的字串欄位，嚴格驗證器會炸 */
+    @Test
+    fun `掛在非集合欄位上被忽略`() {
+      val n = props["notACollection"]!!.jsonObject
+      assertEquals("string", n["type"]!!.jsonPrimitive.content)
+      assertFalse(n.containsKey("minItems"))
+      assertFalse(n.containsKey("maxItems"))
+    }
+  }
 }

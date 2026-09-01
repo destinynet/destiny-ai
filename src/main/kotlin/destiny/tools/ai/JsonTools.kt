@@ -40,6 +40,26 @@ import kotlin.reflect.typeOf
 @Retention(AnnotationRetention.RUNTIME)
 annotation class Description(val value: String)
 
+/**
+ * 集合欄位的長度限制 —— 產出 JSON schema 的 `minItems` / `maxItems`。
+ *
+ * ## 為什麼需要它
+ *
+ * 「請寫 2~4 條」寫在 KDoc 或提示詞的散文裡，對模型只是**請求**，它可以忽略而且經常忽略。
+ * 本專案已有一次實測：某個欄位的 KDoc 寫著「2~4 條」，而實際產出裡**七成的項目超過上限**，
+ * 眾數是 5。散文限制與沒有限制的差別，只在人以為有。
+ *
+ * 掛上本 annotation，限制就進到 schema 本身 —— 與 required 欄位同一個機制：
+ * **不照做就交不出合法輸出**，而不是「希望它照做」。
+ *
+ * ⚠️ 只對 `List` / `Array` 型別的屬性有效；掛在別處會被忽略（schema 不會多出東西）。
+ * ⚠️ 它**不會**在反序列化時擋下超長的輸入 —— 那是另一件事，要就在 data class 的
+ *    `init` 裡 `require`。本 annotation 管的是「模型知不知道限制」。
+ */
+@Target(AnnotationTarget.PROPERTY)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Size(val min: Int = -1, val max: Int = -1)
+
 fun KType.toJsonSchemaType(): String {
   // `String?` 並非 `String` 的 subtype —— 不先剝掉 nullability，所有可為 null 的
   // primitive 都會掉進最後的 `else -> "object"`，被當成巢狀物件反射展開
@@ -267,6 +287,11 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
         // Handle List/Array types
         else if (propertyType.isSubtypeOf(typeOf<List<*>>()) || propertyType.isSubtypeOf(typeOf<Array<*>>())) {
           handleCollectionType(propertyType, visited)
+          // 長度限制只有掛在集合屬性上才有意義 —— 掛在別處靜默忽略（見 [Size] 的 KDoc）
+          property.findAnnotation<Size>()?.also { sz ->
+            if (sz.min >= 0) put("minItems", sz.min)
+            if (sz.max >= 0) put("maxItems", sz.max)
+          }
         }
         // Handle Enum types
         else if (propertyType.classifier is KClass<*> && (propertyType.classifier as KClass<*>).java.isEnum) {
