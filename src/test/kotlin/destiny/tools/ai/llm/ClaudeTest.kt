@@ -400,4 +400,37 @@ class ClaudeTest {
       assertEquals("summarized", doc.read<String>("$.thinking.display"))
     }
   }
+
+  /**
+   * `output_config.effort` 的序列化：設了才送；null 時整個 `output_config` 不出現
+   * （sonnet-5／opus-5 這一代的正式成本槓桿，配 adaptive thinking 用；`disabled` 對 sonnet-5 不可靠）。
+   */
+  @Nested
+  inner class EffortSerialization {
+
+    @Test
+    fun `effort 設了就送 output_config`() {
+      val chatModel = Claude.ChatModel(
+        messages = listOf(Claude.ClaudeMessage.TextContent("user", "hi")),
+        model = "claude-sonnet-5",
+        maxTokens = 1024,
+        options = ChatOptions(thinking = ThinkingMode.ADAPTIVE, effort = destiny.tools.ai.Effort.LOW).toClaude(),
+      )
+      val doc = JsonPath.parse(json.encodeToString(Claude.ChatModel.serializer(), chatModel))
+      assertEquals("low", doc.read<String>("$.output_config.effort"))
+      assertEquals("adaptive", doc.read<String>("$.thinking.type"))
+    }
+
+    @Test
+    fun `effort 沒設就不出現 output_config`() {
+      val chatModel = Claude.ChatModel(
+        messages = listOf(Claude.ClaudeMessage.TextContent("user", "hi")),
+        model = "claude-sonnet-5",
+        maxTokens = 1024,
+        options = ChatOptions(thinking = ThinkingMode.ADAPTIVE).toClaude(),
+      )
+      val doc = JsonPath.parse(json.encodeToString(Claude.ChatModel.serializer(), chatModel))
+      assertFailsWith<PathNotFoundException> { doc.read<Any>("$.output_config") }
+    }
+  }
 }

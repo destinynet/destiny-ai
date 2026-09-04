@@ -73,7 +73,24 @@ data class ChatOptions(
    * 支援；部分最新模型（如 Fable 5）**不接受** [ThinkingMode.DISABLED]。設定前先確認目標 model。
    */
   val thinking: ThinkingMode? = null,
+  /**
+   * 推理深度／輸出預算的粗刻度。null → 不送，沿用該 model 的預設（Anthropic 預設 `high`）。
+   *
+   * 與 [thinking] 搭配用：對 Claude Sonnet 5／Opus 5 這一代，官方建議用 `adaptive` ＋ 低 effort
+   * 來壓思考量，而不是 `disabled` —— 實測 `disabled` 對 sonnet-5 並不可靠（同一設定下八次有兩次
+   * 仍回 thinking block 並吃滿 max_tokens），且 disabled 還會把工具呼叫寫進正文、洩漏 thinking 標籤。
+   * 尚未支援的 impl 直接忽略。
+   */
+  val effort: Effort? = null,
 )
+
+/**
+ * 跨 provider 的推理深度刻度。各 impl 自行映射（Anthropic：`output_config.effort`；
+ * OpenAI：`reasoning_effort` 只有 low/medium/high，XHIGH/MAX 由 impl 收斂）。
+ */
+enum class Effort {
+  LOW, MEDIUM, HIGH, XHIGH, MAX,
+}
 
 /**
  * 跨 provider 的思考模式。各 impl 自行映射到自家的 wire 格式

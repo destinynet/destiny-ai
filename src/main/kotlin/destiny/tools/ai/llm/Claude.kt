@@ -121,9 +121,20 @@ class Claude {
     @SerialName("tool_use")
     data class ToolUse(override val contentType: String = "tool_use", val id: String, val name: String, val input: JsonElement) : Content()
 
+    /**
+     * 工具回傳。Anthropic 規定 assistant 的**每一個** `tool_use` 都要有對應的 `tool_result`，
+     * 而且 user 訊息不得為空 —— 少一個就是 400 `messages.N: user messages must have non-empty content`。
+     *
+     * @param isError 工具端的失敗（未知工具名、invoke 拋例外）用 `is_error: true` 回給模型，
+     *   讓它自己修正，而不是把整段對話弄壞。`null` 時不序列化（預設 Json 省略等於預設值的欄位）。
+     */
     @Serializable
     @SerialName("tool_result")
-    data class ToolResult(@SerialName("tool_use_id") val toolUseId: String, val content: String) : Content() {
+    data class ToolResult(
+      @SerialName("tool_use_id") val toolUseId: String,
+      val content: String,
+      @SerialName("is_error") val isError: Boolean? = null,
+    ) : Content() {
       override val contentType: String = "tool_result"
     }
 
@@ -220,11 +231,28 @@ class Claude {
   data class MetaData(@SerialName("user_id") val userId: String)
 
 
+  /**
+   * request 的 `output_config`。目前只用 `effort`（GA，無 beta header）：控制思考深度與整體 token 支出，
+   * 對 4.6 世代以上有效；配 adaptive thinking 是官方建議的成本／品質槓桿。
+   */
+  @Serializable
+  data class OutputConfig(val effort: Effort? = null) {
+    @Serializable
+    enum class Effort {
+      @SerialName("low") LOW,
+      @SerialName("medium") MEDIUM,
+      @SerialName("high") HIGH,
+      @SerialName("xhigh") XHIGH,
+      @SerialName("max") MAX,
+    }
+  }
+
   data class ClaudeOptions(
     val temperature: Double? = null,  // 0 < x < 1
     val topK: Int? = null,            // > 0
     val topP: Double? = null,         // 0 < x < 1
     val thinking: ThinkingConfig? = null,
+    val effort: OutputConfig.Effort? = null,
   ) {
     companion object {
       fun ChatOptions.toClaude() : ClaudeOptions {
@@ -233,7 +261,15 @@ class Claude {
           this.topK?.value,
           this.topP?.value,
           this.thinking?.toClaude(),
+          this.effort?.toClaude(),
         )
+      }
+      private fun destiny.tools.ai.Effort.toClaude(): OutputConfig.Effort = when (this) {
+        destiny.tools.ai.Effort.LOW    -> OutputConfig.Effort.LOW
+        destiny.tools.ai.Effort.MEDIUM -> OutputConfig.Effort.MEDIUM
+        destiny.tools.ai.Effort.HIGH   -> OutputConfig.Effort.HIGH
+        destiny.tools.ai.Effort.XHIGH  -> OutputConfig.Effort.XHIGH
+        destiny.tools.ai.Effort.MAX    -> OutputConfig.Effort.MAX
       }
 
       /** 跨 provider 的 [ThinkingMode] → Anthropic 的 wire 形狀 */
@@ -280,6 +316,9 @@ class Claude {
 
     /** null → 整個欄位不出現在 payload（`explicitNulls = false`），沿用該 model 的預設 */
     val thinking: ThinkingConfig? = options?.thinking
+    /** null → 不送 `output_config`（effort 沿用 model 預設 `high`）。 */
+    @SerialName("output_config")
+    val outputConfig: OutputConfig? = options?.effort?.let { OutputConfig(it) }
   }
 
   @Serializable
