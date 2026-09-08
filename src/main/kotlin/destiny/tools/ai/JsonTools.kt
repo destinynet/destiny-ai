@@ -201,6 +201,68 @@ fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null):
   return JsonSchemaSpec(name, effectiveDescription, schema)
 }
 
+/**
+ * 頂層 schema 產生的 **KType 版**：與 [KClass.toJsonSchema] 的唯一差別是「泛型參數還在」。
+ *
+ * ## 為什麼需要它
+ *
+ * `FormatSpec.of<T>` 原本走 `T::class.toJsonSchema(...)`，而 `KClass` 一拿到手，
+ * 型別參數就沒了。於是頂層是泛型容器時，產出的 schema 從「有用」掉到「有害」：
+ *
+ * | `FormatSpec.of<T>` 的 T | 舊產出 | 問題 |
+ * |---|---|---|
+ * | `Map<LifePath, String>` | `{"entries":…,"keys":…,"size":…,"values":…}` | 反射出的是 `kotlin.collections.Map` 的 **JVM API**，不是它的內容 |
+ * | `ListContainer<EventInspection>` | `"items":{"type":"object"}` | 元素欄位全丟 —— 型參的 classifier 不是 `KClass`，被靜默吃掉 |
+ * | `ListContainer<String>` | `"items":{"type":"object"}` | 更糟：叫模型在字串陣列裡填物件 |
+ *
+ * 這三種頂層型別在本專案都有活的呼叫端。schema 只在少數 provider 會送出去時，
+ * 這些錯誤還算潛伏；一旦 schema 也進提示詞（見 [JsonSchemaSpec.toPromptBlock]），
+ * 它們就從「沒幫上忙」變成「主動誤導」—— 所以兩件事必須一起做。
+ *
+ * 非泛型（或型別參數用不上）的情況一律回退到 [KClass.toJsonSchema]，行為不變。
+ *
+ * ⚠️ 這只補上**頂層**的型別參數。屬性層級的泛型（`data class Gen<T>(val payload: T)`）
+ * 仍然產出 `{}` —— 那要等 schema 產生器改以 `SerialDescriptor` 為真相來源才會一併消失。
+ */
+fun KType.toJsonSchema(name: String, description: String? = null): JsonSchemaSpec {
+  val t = this.withNullability(false)
+  val kClass = t.classifier as? KClass<*> ?: return JsonSchemaSpec(name, description, buildJsonObject {
+    put("type", "object")
+    description?.let { put("description", it) }
+  })
+
+  val visited = mutableSetOf<KClass<*>>()
+
+  val body: JsonObject = when {
+    t.isSubtypeOf(typeOf<Map<*, *>>())                                    ->
+      buildJsonObject { handleMapType(t, visited) }
+
+    t.isSubtypeOf(typeOf<List<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) ->
+      buildJsonObject { handleCollectionType(t, visited) }
+
+    // ListContainer 是本專案自己的「陣列包一層」容器，`FormatSpec.of` 早就為它的
+    // serializer 開了特例（見 FormatSpec.of），schema 這一半只是一直沒做。
+    kClass == ListContainer::class                                        ->
+      buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+          putJsonObject("array") { handleArrayOfElement(t.arguments.firstOrNull()?.type, visited) }
+        }
+        putJsonArray("required") { add(JsonPrimitive("array")) }
+      }
+
+    else                                                                  -> null
+  } ?: return kClass.toJsonSchema(name, description)
+
+  // handleMapType 對 enum key 會自己放一句 description（「只回提到的 key」），
+  // 那是模型需要知道的語意，不能被呼叫端的 description 蓋掉 —— 兩者併陳。
+  val merged = listOfNotNull(description, body["description"]?.jsonPrimitive?.content)
+    .distinct().joinToString(" ").ifEmpty { null }
+
+  val schema = merged?.let { JsonObject(body + ("description" to JsonPrimitive(it))) } ?: body
+  return JsonSchemaSpec(name, merged, schema)
+}
+
 fun unwrapValueType(kClass: KClass<*>): KType {
   val visited = mutableSetOf<KClass<*>>()
   var currentClass = kClass
@@ -394,10 +456,18 @@ private fun JsonObjectBuilder.addValueTypeSchema(nullableValueType: KType?, visi
 
 // Handle Collection type properties (List, Array)
 private fun JsonObjectBuilder.handleCollectionType(collectionType: KType, visited: MutableSet<KClass<*>>) {
+  handleArrayOfElement(collectionType.arguments.firstOrNull()?.type, visited)
+}
+
+/**
+ * 拆出「元素型別 → array schema」這一段，讓拿得到元素型別、卻拿不到 `List<E>` 這個 [KType]
+ * 的呼叫端（[ListContainer] 的 `array` 欄位）也能重用，而不必去合成一個 KType。
+ */
+private fun JsonObjectBuilder.handleArrayOfElement(rawElementType: KType?, visited: MutableSet<KClass<*>>) {
   put("type", "array")
 
   // Add items schema based on the collection element type
-  val elementType = collectionType.arguments.firstOrNull()?.type?.withNullability(false)
+  val elementType = rawElementType?.withNullability(false)
   if (elementType != null) {
     val elementClassifier = elementType.classifier
     putJsonObject("items") {

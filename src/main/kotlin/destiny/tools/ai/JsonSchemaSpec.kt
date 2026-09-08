@@ -15,3 +15,39 @@ data class JsonSchemaSpec(
   val description: String?, val schema: JsonObject)
 
 
+/**
+ * schema → 提示詞裡的「輸出格式」區塊。
+ *
+ * ## 為什麼需要它
+ *
+ * `IChatCompletion.chatComplete` 收得到 [JsonSchemaSpec]，但**十二個 chat impl 裡只有三個**
+ * （OpenAi / Mistral / XiaoMi）真的把它放進 request；Groq 降級成 `response_format: json_object`
+ * （schema 本身丟掉），Claude / Gemini / Cohere / Reka / Cerebras / Together / Xai / Deepseek
+ * 則是簽名收下就沒有下文。
+ *
+ * 而提示詞那側原本寫的是
+ *
+ * > only provide a RFC8259 compliant JSON response **following this format** without deviation
+ *
+ * —— "this format" 指的那份 format 從來沒有出現在提示詞裡。對上述九家而言，模型收到的全部訊息
+ * 就是「請回 JSON」：欄位名、型別、enum 值域、`minItems` 一個都拿不到，只有實作了
+ * `fieldGuidance()` / `exampleOutput()` 的 digester 靠序列化一份實例間接補上。
+ *
+ * 本函式就是把那份 format 補回去。langchain4j 在 provider 不支援 JSON schema 時會自動退回
+ * 這條路（它自承 "quite unreliable"，但至少模型看得到欄位）；spring-ai 的
+ * `BeanOutputConverter.getFormat()` 更是**預設**就走這條，其樣板的最後一行正是本函式的出處。
+ *
+ * ⚠️ **對已經原生送出 schema 的三家（OpenAi / Mistral / XiaoMi）這是重複的 token。**
+ * 這是刻意的取捨：digest 階段拿不到 provider，而「少數人多付一點 token」遠優於
+ * 「多數人完全不知道要填什麼」。等 Claude / Gemini 的原生 structured output 接上之後，
+ * 才有條件改成 provider-aware 的開關。
+ *
+ * 用裸 ``` 圍籬（不寫 ```json）—— 同一段指令的下一句要求模型「把輸出的 ```json 拿掉」，
+ * 圍籬標成 json 會讓那兩句互相打架。
+ */
+fun JsonSchemaSpec.toPromptBlock(): String = buildString {
+  appendLine("Here is the JSON Schema instance your output must adhere to:")
+  appendLine("```")
+  appendLine(schema.toString())
+  append("```")
+}

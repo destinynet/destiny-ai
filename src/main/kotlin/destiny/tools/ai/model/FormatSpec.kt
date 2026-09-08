@@ -47,7 +47,9 @@ interface FormatSpec<T : Any> {
         serializer<T>()
       }
 
-      val schema = T::class.toJsonSchema(title, description)
+      // ⚠️ 用 kType 而非 T::class —— `KClass` 一拿到手型別參數就沒了，
+      // 頂層是 Map / List / ListContainer 時會產出無用甚至誤導的 schema。見 [KType.toJsonSchema]。
+      val schema = kType.toJsonSchema(title, description)
 
       return Impl(ser, schema, T::class)
     }
