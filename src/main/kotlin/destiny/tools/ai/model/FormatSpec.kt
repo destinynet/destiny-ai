@@ -14,6 +14,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
+import kotlin.reflect.full.isSubtypeOf
 import kotlin.reflect.typeOf
 
 
@@ -34,6 +35,11 @@ interface FormatSpec<T : Any> {
       require(title.matches(Regex("^[a-zA-Z0-9_-]+$"))) { $$"title must match pattern '^[a-zA-Z0-9_-]+$', but was: '$$title'" }
 
       val kType = typeOf<T>()
+      // 頂層集合產得出 {"type":"array"}，但 OpenAI / Claude / Gemini 的 structured output 都要求 root 是 object。
+      // 要回陣列請用 ListContainer（root 是帶一個 `array` 欄位的 object，serializer 也接受裸陣列）。
+      require(!kType.isSubtypeOf(typeOf<Collection<*>>()) && !kType.isSubtypeOf(typeOf<Array<*>>())) {
+        "top-level ${kType} is not accepted by structured-output APIs (root must be an object); wrap it in ListContainer<T>"
+      }
 
       // 關鍵修改：偵測 T 是否為 ListContainer
       val ser: KSerializer<T> = if (kType.classifier == ListContainer::class) {

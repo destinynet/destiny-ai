@@ -139,6 +139,32 @@ private fun JsonObject.toClaudeNode(specName: String): JsonObject {
 }
 
 /**
+ * 這份 canonical schema 裡有沒有 **open map**（`Map<String, V>` → `additionalProperties: {…}`）。
+ *
+ * ## 為什麼要在送出前問這件事
+ *
+ * Claude 的 `output_config.format` 要求每個 object 都 `additionalProperties:false`，於是
+ * [SchemaDialect.CLAUDE] 只能把值型別丟掉再補上 `false` —— 得到的節點**沒有 properties 又禁止額外欄位，
+ * 唯一合法的值是 `{}`**。不是「少了型別提示」，是這個欄位再也填不進任何東西；它若還在 `required` 裡，
+ * 模型只能交空物件。yearly 的 `scores: Map<String, Int>` 正是這個形狀。
+ *
+ * 所以 impl 送 schema 之前先問這個：有的話退回 prompt-only（schema 仍在提示詞裡）並 warn，
+ * 而不是把一份保證交出空 map 的約束綁上去。Gemini 那邊把 `additionalProperties` 拿掉後是**開放**物件，
+ * 沒有這個死結。
+ */
+fun JsonSchemaSpec.hasOpenMap(): Boolean = schema.anyNode { it["additionalProperties"] is JsonObject }
+
+/** 樹上任一節點滿足 [pred] 即 true；子層位置與 [transformNodes] 相同。 */
+private fun JsonObject.anyNode(pred: (JsonObject) -> Boolean): Boolean {
+  if (pred(this)) return true
+  (this["properties"] as? JsonObject)?.values?.forEach { if (it is JsonObject && it.anyNode(pred)) return true }
+  (this["items"] as? JsonObject)?.let { if (it.anyNode(pred)) return true }
+  (this["additionalProperties"] as? JsonObject)?.let { if (it.anyNode(pred)) return true }
+  (this["anyOf"] as? JsonArray)?.forEach { if (it is JsonObject && it.anyNode(pred)) return true }
+  return false
+}
+
+/**
  * 對 schema 樹的每個節點套用 [rule]，先套用本層再遞迴子層。
  *
  * 子層的位置只有四處：`properties` 的每個值、`items`、`additionalProperties`（值型別）、

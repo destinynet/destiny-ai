@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -100,12 +101,16 @@ class GenericTopLevelSchemaTest {
     )
   }
 
+  /**
+   * 頂層是集合時，產得出 `{"type":"array",…}`，但 OpenAI / Claude / Gemini 的 structured output
+   * 都要求 root 是 object —— 送出去就是 400。生產路徑一律走 [ListContainer]（root 是有一個
+   * `array` 欄位的 object），這裡把「產得出來但送不出去」的形狀直接擋在 `FormatSpec.of`。
+   */
   @Test
-  fun `top-level List of POJO carries items`() {
-    val schema = FormatSpec.of<List<Item>>("items", "a list").jsonSchema.schema
-
-    assertEquals("array", schema.str("type"))
-    assertEquals(setOf("id", "label"), schema.obj("items").obj("properties").keys)
+  fun `top-level List or Set is rejected, use ListContainer`() {
+    val e = assertFailsWith<IllegalArgumentException> { FormatSpec.of<List<Item>>("items", "a list") }
+    assertTrue(e.message!!.contains("ListContainer"), e.message)
+    assertFailsWith<IllegalArgumentException> { FormatSpec.of<Set<Item>>("items", "a set") }
   }
 
   @Test

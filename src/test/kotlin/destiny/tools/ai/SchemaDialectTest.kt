@@ -220,4 +220,29 @@ class SchemaDialectTest {
     spec.render(SchemaDialect.CLAUDE)
     assertEquals(before, spec.schema.toString())
   }
+
+  // ─── open map（Map<String, V>）：Claude 方言下是死結，要在送出前偵測 ───
+
+  @Serializable
+  data class Scores(val byName: Map<String, Int>)
+
+  @Serializable
+  data class Nested(val rows: List<Scores>)
+
+  /**
+   * `additionalProperties: {…}` 被丟掉、再補上 `false`：這個節點沒有 properties 又禁止額外欄位，
+   * 唯一合法的值是 `{}`。yearly 的 `scores: Map<String, Int>` 就是這個形狀 —— 目前只因為該 segment
+   * 帶著 tools 而沒送 schema。所以送出前必須能問「這份 schema 有 open map 嗎」。
+   */
+  @Test
+  fun `CLAUDE turns an open map into a dead end, and hasOpenMap detects it before sending`() {
+    val scores = FormatSpec.of<Scores>("scores", "probe").jsonSchema
+    val node = scores.render(SchemaDialect.CLAUDE).obj("properties", "byName")
+    assertEquals(JsonPrimitive(false), node["additionalProperties"])
+    assertNull(node["properties"])
+
+    assertTrue(scores.hasOpenMap())
+    assertTrue(FormatSpec.of<Nested>("nested", "probe").jsonSchema.hasOpenMap(), "藏在 items 底下也要抓到")
+    assertFalse(spec.hasOpenMap(), "enum-keyed map 與一般物件不是 open map")
+  }
 }
