@@ -23,6 +23,17 @@ interface FormatSpec<T : Any> {
   val jsonSchema: JsonSchemaSpec
   val kClass: KClass<T>
 
+  /**
+   * 內容層的驗證：decode 成功之後再問一次「這份回覆完整嗎」。回 null 表示通過，
+   * 回字串就是失敗原因，`typedChatComplete` 會把它變成 [destiny.tools.ai.Reply.Error.DeserializationFailure]。
+   *
+   * schema 的 `required` 守的是「欄位在不在」，這裡守的是 schema 說不出來的事：
+   * map 少了一半的 key、列表比 `@Size` 說的還短、數字加起來不等於總數。
+   * 2026-09-09 實跑：沒有這一層時，Gemini 交 4/12 個 domain 一樣是「成功」。
+   * 用 [validated] 掛上；預設不驗。
+   */
+  val validator: (T) -> String? get() = { null }
+
   companion object {
     /**
      * title pattern '^[a-zA-Z0-9_-]+$'
@@ -68,8 +79,16 @@ interface FormatSpec<T : Any> {
     internal class Impl<T : Any>(
       override val serializer: KSerializer<T>,
       override val jsonSchema: JsonSchemaSpec,
-      override val kClass: KClass<T>
+      override val kClass: KClass<T>,
+      override val validator: (T) -> String? = { null },
     ) : FormatSpec<T> {
+      /**
+       * 三參數版保留給**已內嵌**的呼叫端：`FormatSpec.of` 是 inline，下游模組沒 clean 重編時，
+       * 位元組碼裡還是舊的建構子簽名 —— 少了這個就是 NoSuchMethodError（2026-09-09 實際踩到）。
+       */
+      constructor(serializer: KSerializer<T>, jsonSchema: JsonSchemaSpec, kClass: KClass<T>) :
+        this(serializer, jsonSchema, kClass, { null })
+
       override fun toString() = "FormatSpec(serializer=$serializer, jsonSchema=$jsonSchema)"
     }
   }
@@ -117,5 +136,18 @@ fun <T : Any> FormatSpec<T>.narrowEnumKeys(property: String, keys: Iterable<Enum
     )
   )
   val narrowedSchema = JsonObject(schema + ("properties" to JsonObject(props + (property to narrowedNode))))
-  return FormatSpec.Companion.Impl(serializer, jsonSchema.copy(schema = narrowedSchema), kClass)
+  return FormatSpec.Companion.Impl(serializer, jsonSchema.copy(schema = narrowedSchema), kClass, validator)
+}
+
+/**
+ * 掛上內容層的驗證（見 [FormatSpec.validator]）。已有驗證時兩者串接：先跑舊的，通過再跑 [check]。
+ *
+ * ```kotlin
+ * FormatSpec.of<BirthDataReply>("birth_data_reply", "…")
+ *   .validated { r -> BirthDataDomain.entries.filterNot { it in r.domains }.takeIf { it.isNotEmpty() }?.let { "missing domains $it" } }
+ * ```
+ */
+fun <T : Any> FormatSpec<T>.validated(check: (T) -> String?): FormatSpec<T> {
+  val previous = validator
+  return FormatSpec.Companion.Impl(serializer, jsonSchema, kClass) { value -> previous(value) ?: check(value) }
 }

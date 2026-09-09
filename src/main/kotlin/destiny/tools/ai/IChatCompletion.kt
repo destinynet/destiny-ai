@@ -2,7 +2,6 @@ package destiny.tools.ai
 
 import mu.KotlinLogging
 import destiny.tools.ai.model.FormatSpec
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import java.util.*
 import kotlin.time.Duration
@@ -228,30 +227,37 @@ abstract class AbstractChatCompletion : IChatCompletion {
         }
         val serializer = formatSpec.serializer
 
-        val typedResult: T = try {
-          if (formatSpec.kClass == String::class) {
-            processedString as T
-          } else {
-            // provider / model 住在 Reply.Normal 的信封上，不塞進 DTO —— 塞進去會反射進 schema 要模型填
-            json.decodeFromString(serializer, processedString)
+        fun failure(message: String, content: String) = Reply.Error.DeserializationFailure(
+          errorMessage = message,
+          originalContent = content,
+          provider = rawReply.provider,
+          model = rawReply.model,
+        )
+
+        val typedResult: T = if (formatSpec.kClass == String::class) {
+          @Suppress("UNCHECKED_CAST")
+          processedString as T
+        } else {
+          // 空回覆（Claude 沒有 text block、模型只回了 tool_use…）直接歸類，別讓 decoder 吐一句看不懂的錯
+          if (processedString.isBlank()) {
+            logger.warn { "$model returned empty content for ${serializer.descriptor.serialName}" }
+            return failure("empty content", processedString)
           }
-        } catch (e: SerializationException) {
-          logger.warn(e) { "Failed to deserialize content from $model (serializer: ${serializer.descriptor.serialName}). Content: $processedString" }
-          // 反序列化失敗，返回一個特定的錯誤類型
-          return Reply.Error.DeserializationFailure(
-            errorMessage = e.localizedMessage ?: "Serialization failed",
-            originalContent = processedString,
-            provider = rawReply.provider,
-            model = rawReply.model
-          )
-        } catch (e: ClassCastException) { // 處理 String as T 可能的錯誤
-          logger.warn(e) { "Failed to cast processed string to T for $model. Expected String but T is not String. Content: $processedString" }
-          return Reply.Error.DeserializationFailure(
-            errorMessage = "Type cast failed: Expected String, but T is ${serializer.descriptor.serialName}",
-            originalContent = processedString,
-            provider = rawReply.provider,
-            model = rawReply.model
-          )
+          // 輸出型別不是 String 就切 JSON 本體 —— 這是 typed 路徑的事實，不是 domain 的選項（見 JsonExtract）
+          val jsonText = JsonExtract.extract(processedString)
+          val parsed: T = try {
+            json.decodeFromString(serializer, jsonText)
+          } catch (e: IllegalArgumentException) {
+            // SerializationException 是 IllegalArgumentException 的子類；DTO 的 init { require } 丟的也是它
+            logger.warn(e) { "Failed to deserialize content from $model (serializer: ${serializer.descriptor.serialName}). Content: $jsonText" }
+            return failure(e.localizedMessage ?: "Serialization failed", jsonText)
+          }
+          // 內容層驗證：decode 成功不代表完整（見 FormatSpec.validator）
+          formatSpec.validator(parsed)?.let { reason ->
+            logger.warn { "$model reply for ${serializer.descriptor.serialName} failed validation: $reason" }
+            return failure("validation failed: $reason", jsonText)
+          }
+          parsed
         }
 
         Reply.Normal(
