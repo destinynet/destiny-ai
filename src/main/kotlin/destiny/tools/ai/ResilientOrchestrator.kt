@@ -23,6 +23,9 @@ import kotlin.time.Duration.Companion.seconds
  *
  * Chat 走 [ResilientChatService]（綁 typedChatComplete）；image 等其他 modality
  * 只要 attempt 回傳 [Reply] 即可共用本引擎。
+ *
+ * 失敗時每一次嘗試的分類都留在 [Orchestration.Exhausted] 裡（[executeExplained]）；
+ * [execute] 只是它的 `successOrNull()`。
  */
 class ResilientOrchestrator(
   private val providerModels: Set<ProviderModel>,
@@ -30,24 +33,32 @@ class ResilientOrchestrator(
   private val maxTotalAttempts: Int = 3,
 ) {
 
-  suspend fun <T : Any> execute(attempt: suspend (ProviderModel) -> Reply<T>?): Reply.Normal<T>? {
+  suspend fun <T : Any> execute(attempt: suspend (ProviderModel) -> Reply<T>?): Reply.Normal<T>? =
+    (executeExplained(attempt) as? Orchestration.Success<T>)?.reply
+
+  /**
+   * 同 [execute]，但失敗時回 [Orchestration.Exhausted]，帶著每一次嘗試的分類 —— 見 [Orchestration] 的說明。
+   */
+  suspend fun <T : Any> executeExplained(attempt: suspend (ProviderModel) -> Reply<T>?): Orchestration<T> {
     if (providerModels.isEmpty()) {
       logger.warn { "No provider models specified for resilient execution." }
-      return null
+      return Orchestration.Exhausted(emptyList(), note = "no provider models")
     }
 
     // 跨 loop 共享的狀態：API key 無效的 provider 整個 execute 都不再嘗試
     val disabledProviders = mutableSetOf<Provider>()
-
+    val attempts = mutableListOf<Orchestration.Attempt>()
     var attemptsLeft = maxTotalAttempts
+
     while (attemptsLeft > 0) {
+      val loop = maxTotalAttempts - attemptsLeft + 1
       val candidates: List<ProviderModel> = providerModels
         .filter { it.provider !in disabledProviders }
         .shuffled()
 
       if (candidates.isEmpty()) {
-        logger.error { "All providers disabled (invalid API keys or similar); aborting after ${maxTotalAttempts - attemptsLeft} loops." }
-        return null
+        logger.error { "All providers disabled (invalid API keys or similar); aborting after ${loop - 1} loops." }
+        return Orchestration.Exhausted(attempts, note = "all providers disabled (invalid API key)")
       }
 
       logger.info { "Starting attempt loop (attemptsLeft=$attemptsLeft), candidates: ${candidates.map { "${it.provider}/${it.model}" }}" }
@@ -57,6 +68,9 @@ class ResilientOrchestrator(
 
       val result: Reply.Normal<T>? = candidates.suspendFirstNotNullResult { providerModel ->
         logger.debug { "Attempting ${providerModel.provider}/${providerModel.model}" }
+        fun record(error: Reply.Error? = null, thrown: Throwable? = null, note: String? = null) {
+          attempts += Orchestration.Attempt(providerModel, error = error, thrown = thrown, note = note, loop = loop)
+        }
         try {
           when (val reply = attempt(providerModel)) {
             is Reply.Normal -> reply
@@ -65,6 +79,7 @@ class ResilientOrchestrator(
               // session-permanent：剩下的 loop 都不要再試這個 provider
               logger.warn { "InvalidApiKey on ${reply.provider}; disabling provider for the rest of this call" }
               disabledProviders += reply.provider
+              record(error = reply)
               null
             }
 
@@ -73,27 +88,32 @@ class ResilientOrchestrator(
                 if (hint > maxRetryAfter) maxRetryAfter = hint
               }
               logger.warn { "Retryable[RateLimited] on ${providerModel.provider}/${providerModel.model}, retryAfter=${reply.retryAfter}, msg=${reply.message}" }
+              record(error = reply)
               null
             }
 
             is Reply.Error.Retryable -> {
               logger.warn { "Retryable on ${providerModel.provider}/${providerModel.model}: $reply" }
+              record(error = reply)
               null
             }
 
             is Reply.Error.Terminal -> {
               logger.warn { "Terminal on ${providerModel.provider}/${providerModel.model}: $reply" }
+              record(error = reply)
               null
             }
 
             is Reply.Error -> {
               // 安全網：未來新增的 leaf 沒實作 Retryable/Terminal marker 時也能 fall through
               logger.warn { "Unclassified error on ${providerModel.provider}/${providerModel.model}: $reply" }
+              record(error = reply)
               null
             }
 
             null -> {
               logger.warn { "attempt returned null for ${providerModel.provider}/${providerModel.model}" }
+              record(note = "attempt returned null")
               null
             }
           }
@@ -102,13 +122,14 @@ class ResilientOrchestrator(
           throw e
         } catch (e: Exception) {
           logger.error(e) { "Exception during attempt with ${providerModel.provider}/${providerModel.model}" }
+          record(thrown = e)
           null
         }
       }
 
       if (result != null) {
         logger.info { "Success on ${result.provider}/${result.model} (attemptsLeft=$attemptsLeft)" }
-        return result
+        return Orchestration.Success(result)
       }
 
       attemptsLeft--
@@ -120,8 +141,9 @@ class ResilientOrchestrator(
       }
     }
 
-    logger.error { "All $maxTotalAttempts attempt loops exhausted." }
-    return null
+    val exhausted = Orchestration.Exhausted(attempts)
+    logger.error { "All $maxTotalAttempts attempt loops exhausted: ${exhausted.describe()}" }
+    return exhausted
   }
 
   companion object {

@@ -6,6 +6,7 @@ package destiny.tools.ai
 import kotlinx.coroutines.*
 import kotlinx.coroutines.selects.select
 import mu.KotlinLogging
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration
 
@@ -16,7 +17,7 @@ import kotlin.time.Duration
  * - [preferred] 與所有 [fallbacks] **同時**發出請求。
  * - [preferred] 若在 [preferredWait] 內成功（[Reply.Normal]）→ 回傳它、取消其他。
  * - 否則（超時 / Error / null）→ 取消 preferred，改等 fallbacks 中**第一個成功**者；
- *   全部失敗才回 null。
+ *   全部失敗才回 [Orchestration.Exhausted]（[execute] 則回 null）。
  *   （較快完成但失敗的 fallback 不會 mask 掉較慢成功的 fallback —— 這是對舊實作
  *   select 一次即定生死的修正，語意向文件化意圖看齊。）
  * - 單一 attempt 拋出 exception 視為該路失敗，不會炸掉整場 race。
@@ -34,9 +35,14 @@ class HedgeOrchestrator(
     require(!fallbacks.contains(preferred))
   }
 
-  suspend fun <T : Any> execute(attempt: suspend (ProviderModel) -> Reply<T>?): Reply.Normal<T>? = coroutineScope {
+  suspend fun <T : Any> execute(attempt: suspend (ProviderModel) -> Reply<T>?): Reply.Normal<T>? =
+    (executeExplained(attempt) as? Orchestration.Success<T>)?.reply
 
+  /** 同 [execute]，但失敗時回 [Orchestration.Exhausted]：preferred 的超時／失敗與每個 fallback 的失敗都列著。 */
+  suspend fun <T : Any> executeExplained(attempt: suspend (ProviderModel) -> Reply<T>?): Orchestration<T> = coroutineScope {
     val allModels = setOf(preferred) + fallbacks
+    // 例外不能只吞成 null —— 留下來給 Exhausted 說明
+    val thrown = ConcurrentHashMap<ProviderModel, Throwable>()
 
     val deferredMap: Map<ProviderModel, Deferred<Reply<T>?>> = allModels.associateWith { providerModel ->
       async(context + CoroutineName("Hedge-${providerModel.provider}/${providerModel.model}")) {
@@ -46,10 +52,18 @@ class HedgeOrchestrator(
           throw e
         } catch (e: Exception) {
           logger.error(e) { "Exception during attempt with ${providerModel.provider}/${providerModel.model}" }
+          thrown[providerModel] = e
           null
         }
       }
     }
+
+    fun attemptOf(pm: ProviderModel, reply: Reply<T>?, note: String? = null) = Orchestration.Attempt(
+      pm,
+      error = reply as? Reply.Error,
+      thrown = thrown[pm],
+      note = note ?: if (reply == null && thrown[pm] == null) "attempt returned null" else null,
+    )
 
     val preferredResult: Reply<T>? = withTimeoutOrNull(preferredWait) {
       deferredMap[preferred]?.await()
@@ -59,13 +73,16 @@ class HedgeOrchestrator(
       // preferred 在時限內成功完成 -> 回傳 preferred，並取消其他
       logger.info { "Preferred model $preferred succeeded within the time limit." }
       deferredMap.filterKeys { it != preferred }.values.forEach { it.cancel() }
-      preferredResult
+      Orchestration.Success(preferredResult)
     } else {
+      val attempts = mutableListOf<Orchestration.Attempt>()
       // preferred 超時、失敗(Error)或回傳null -> 從 fallbacks 中選擇第一個成功的
       if (preferredResult != null) {
         logger.warn { "Preferred model $preferred failed or returned an error: $preferredResult. Looking for a fallback..." }
+        attempts += attemptOf(preferred, preferredResult)
       } else {
         logger.warn { "Preferred model $preferred timed out. Looking for a fallback..." }
+        attempts += attemptOf(preferred, null, note = if (thrown[preferred] == null) "timed out after $preferredWait" else null)
       }
       // preferred 已出局，立即取消（若還在跑），不再燒 token；也避免 coroutineScope 等它收尾
       deferredMap[preferred]?.cancel()
@@ -85,14 +102,16 @@ class HedgeOrchestrator(
           winner = completedModel to reply
         } else {
           logger.warn { "Fallback $completedModel failed: $reply" }
+          attempts += attemptOf(completedModel, reply)
         }
       }
 
-      winner?.also { (winnerModel, _) ->
+      winner?.let { (winnerModel, reply) ->
         logger.info { "Using fallback result from $winnerModel" }
         // 取消所有其他仍在執行的任務
         deferredMap.filterKeys { it != winnerModel }.values.forEach { if (it.isActive) it.cancel() }
-      }?.second
+        Orchestration.Success(reply)
+      } ?: Orchestration.Exhausted(attempts).also { logger.error { it.describe() } }
     }
   }
 

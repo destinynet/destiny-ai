@@ -4,7 +4,6 @@
 package destiny.tools.ai
 
 import destiny.tools.ai.model.FormatSpec
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import java.util.*
 
@@ -20,17 +19,11 @@ class HedgeChatService(
   private val config: HedgeConfig,
 ) : IChatOrchestrator {
 
-  @OptIn(ExperimentalSerializationApi::class)
-  val json: Json = Json {
-    prettyPrint = true
-    ignoreUnknownKeys = true
-    allowTrailingComma = true
-    isLenient = true
-  }
+  /** 解碼用的 Json 全專案只有一份，見 [LlmJson] */
+  val json: Json = LlmJson.lenient
 
   private val core = HedgeOrchestrator(config.preferred, config.fallbacks, config.preferredWait)
 
-  @Suppress("UNCHECKED_CAST")
   override suspend fun <T : Any> chatComplete(
     formatSpec: FormatSpec<out T>,
     messages: List<Msg>,
@@ -39,8 +32,20 @@ class HedgeChatService(
     funCalls: Set<IFunctionDeclaration>,
     chatOptionsTemplate: ChatOptions,
     providerImpl: (Provider) -> IChatCompletion
-  ): Reply.Normal<out T>? {
-    return core.execute { providerModel ->
+  ): Reply.Normal<out T>? =
+    chatCompleteOrExplain(formatSpec, messages, postProcessors, locale, funCalls, chatOptionsTemplate, providerImpl).successOrNull()
+
+  @Suppress("UNCHECKED_CAST")
+  override suspend fun <T : Any> chatCompleteOrExplain(
+    formatSpec: FormatSpec<out T>,
+    messages: List<Msg>,
+    postProcessors: List<IPostProcessor>,
+    locale: Locale,
+    funCalls: Set<IFunctionDeclaration>,
+    chatOptionsTemplate: ChatOptions,
+    providerImpl: (Provider) -> IChatCompletion
+  ): Orchestration<out T> {
+    return core.executeExplained { providerModel ->
       val impl = providerImpl.invoke(providerModel.provider)
       val currentChatOptions = chatOptionsTemplate.copy(
         temperature = providerModel.temperature ?: chatOptionsTemplate.temperature,
