@@ -5,6 +5,7 @@ package destiny.tools.ai
 
 import destiny.tools.ai.model.FormatSpec
 import destiny.tools.ai.model.narrowEnumKeys
+import destiny.tools.ai.model.requiringKeys
 import destiny.tools.ai.model.validated
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.Serializable
@@ -112,5 +113,20 @@ class TypedChatCompleteTest {
     val spec = reportSpec.validated { "always fails" }.narrowEnumKeys("topics", listOf(Topic.A))
     val reply = run("""{"topics":{"A":"a"},"summary":"s"}""", spec)
     assertIs<Reply.Error.DeserializationFailure>(reply)
+  }
+
+  @Test
+  fun `requiringKeys names exactly the missing keys`() = runTest {
+    val spec = reportSpec.requiringKeys("topics", Topic.entries) { it.topics.keys }
+    val reply = run("""{"topics":{"B":"b"},"summary":"s"}""", spec)
+    assertIs<Reply.Error.DeserializationFailure>(reply)
+    assertTrue(reply.errorMessage.contains("topics missing [A, C]"), reply.errorMessage)
+  }
+
+  @Test
+  fun `requiringKeys passes when every expected key is present, extra keys are fine`() = runTest {
+    val spec = reportSpec.requiringKeys("topics", listOf(Topic.A)) { it.topics.keys }
+    val reply = run("""{"topics":{"A":"a","B":"b"},"summary":"s"}""", spec)
+    assertIs<Reply.Normal<Report>>(reply)
   }
 }

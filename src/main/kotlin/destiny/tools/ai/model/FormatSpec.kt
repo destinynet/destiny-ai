@@ -151,3 +151,18 @@ fun <T : Any> FormatSpec<T>.validated(check: (T) -> String?): FormatSpec<T> {
   val previous = validator
   return FormatSpec.Companion.Impl(serializer, jsonSchema, kClass) { value -> previous(value) ?: check(value) }
 }
+
+/**
+ * enum-keyed map 的完整性檢查：回覆裡 [keys] 取出的集合必須涵蓋 [expected] 的每一個；少了就列出來。
+ *
+ * `Map<Enum, V>` 對 kotlinx 來說**少 key 是合法的** —— `{"domains":{"GENERAL":"…"}}` 解得開，
+ * 得到一個只有一個 entry 的 map。schema 的 `required` 是送給模型看的約束（原生 structured output
+ * 的四家會遵守，其餘六家不會），不是解碼端的檢查。2026-09-09 實跑 Gemini 交 4/12 個 domain，
+ * 三層裡沒有一層說「不對」—— 這是回覆端唯一能說不對的地方。
+ *
+ * `expected` 請跟 [narrowEnumKeys] 用同一份清單，schema 要求什麼、回覆端就檢查什麼。
+ *
+ * @param what 欄位名，只用在錯誤訊息裡（"domains missing [LOVE, CAREER]"）
+ */
+fun <T : Any, K> FormatSpec<T>.requiringKeys(what: String, expected: Collection<K>, keys: (T) -> Set<K>): FormatSpec<T> =
+  validated { value -> (expected - keys(value)).takeIf { it.isNotEmpty() }?.let { "$what missing $it" } }
