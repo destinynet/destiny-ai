@@ -415,12 +415,20 @@ class JsonToolsTest {
       logger.info { "schema: $schema" }
       val me = schema["properties"]!!.jsonObject["mapEnum"]!!.jsonObject
       assertEquals("object", me["type"]!!.jsonPrimitive.content)
-      assertTrue { me["description"]!!.jsonPrimitive.content.startsWith("Map with keys from MyEnum enum") }
       assertEquals(false, me["additionalProperties"]!!.jsonPrimitive.boolean)
       val ep = me["properties"]!!.jsonObject
       assertTrue(ep.containsKey("A"))
       assertTrue(ep.containsKey("B"))
       assertEquals("string", ep["A"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+
+      // fail-closed：enum 的每個 key 都是 required，模型交不出來就交不出合法輸出。
+      // 先前沒有 required、description 又寫「只回提到的 key」，原生 structured output
+      // 一接上，Gemini 交 4/12、Claude 交 8/12 而反序列化照樣「成功」。
+      val req = me["required"]!!.jsonArray.map { it.jsonPrimitive.content }
+      assertEquals(listOf("A", "B"), req)
+      val desc = me["description"]!!.jsonPrimitive.content
+      assertFalse(desc.contains("only return mentioned"), desc)
+      assertTrue(desc.contains("required"), desc)
     }
 
     @Test
@@ -445,7 +453,7 @@ class JsonToolsTest {
       val spec = MapEnumList::class.toJsonSchema("MapEnumList", null)
       val m = spec.schema["properties"]!!.jsonObject["m"]!!.jsonObject
       assertEquals("object", m["type"]!!.jsonPrimitive.content)
-      assertTrue { m["description"]!!.jsonPrimitive.content.startsWith("Map with keys from MyEnum enum") }
+      assertTrue { m["description"]!!.jsonPrimitive.content.startsWith("Map keyed by MyEnum enum") }
       assertFalse(m["additionalProperties"]!!.jsonPrimitive.boolean)
       val props = m["properties"]!!.jsonObject
       props.keys.forEach { key -> assertTrue(key == "A" || key == "B") }

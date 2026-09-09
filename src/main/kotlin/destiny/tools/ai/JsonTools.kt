@@ -297,7 +297,7 @@ inline fun <reified K : Enum<K>, reified V> toEnumMapJsonSchema(
 
   val schema = buildJsonObject {
     put("type", "object")
-    put("description", description ?: "Map with keys from enum ${keyClass.simpleName}. Note : only return mentioned enum keys, Please ignore un-mentioned keys.")
+    put("description", description ?: "Map keyed by ${keyClass.simpleName} enum. Every key listed under properties is required.")
 
     putJsonObject("properties") {
       keyClass.java.enumConstants.forEach { enumVal ->
@@ -412,17 +412,27 @@ private fun JsonObjectBuilder.handleMapType(mapType: KType, visited: MutableSet<
 
   if (keyType?.classifier is KClass<*> && (keyType.classifier as KClass<*>).java.isEnum) {
     val enumClass = keyType.classifier as KClass<*>
-    val enumValues = enumClass.java.enumConstants
+    val serialNames = enumClass.java.enumConstants.map { getEnumSerialName(enumClass, it) }
 
-    put("description", "Map with keys from ${enumClass.simpleName} enum. Note : only return mentioned enum keys, Please ignore un-mentioned keys.")
+    // fail-closed：每個 enum key 都列進 required。
+    //
+    // 先前這裡沒有 required，description 還寫著「只回提到的 key、忽略沒提到的」——
+    // schema 只在提示詞裡時，模型會照 fieldGuidance 把 12 個 key 填滿；一旦 schema 進了
+    // API 層（Gemini responseSchema / Claude output_config），約束說 12 個都可省略，
+    // 模型就真的省了：實測 Gemini 交 4/12、Claude 交 8/12，而反序列化照樣「成功」。
+    // 只想要子集的呼叫端請用 [destiny.tools.ai.model.narrowEnumKeys]，把 properties 與 required
+    // 一起收窄 —— 而不是靠一句散文請模型忽略。
+    put("description", "Map keyed by ${enumClass.simpleName} enum. Every key listed under properties is required.")
     put("additionalProperties", JsonPrimitive(false))
     putJsonObject("properties") {
-      enumValues.forEach { enumValue ->
-        val serialName = getEnumSerialName(enumClass, enumValue)
+      serialNames.forEach { serialName ->
         putJsonObject(serialName) {
           addValueTypeSchema(valueType, visited)
         }
       }
+    }
+    putJsonArray("required") {
+      serialNames.forEach { add(JsonPrimitive(it)) }
     }
   } else {
     putJsonObject("additionalProperties") {

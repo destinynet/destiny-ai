@@ -8,6 +8,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -39,11 +40,14 @@ class GenericTopLevelSchemaTest {
     assertEquals(setOf("CAREER", "LOVE"), props.keys)
     assertEquals("string", props.obj("CAREER").str("type"))
     assertEquals(JsonPrimitive(false), schema["additionalProperties"])
+    // 頂層 enum-keyed map 同樣 fail-closed：每個 key 都 required
+    assertEquals(listOf("CAREER", "LOVE"), schema["required"]!!.jsonArray.map { it.jsonPrimitive.content })
 
-    // 呼叫端的 description 與「只回提到的 key」這個語意提示要併陳，不能互相蓋掉
+    // 呼叫端的 description 與產生器自己的說明要併陳，不能互相蓋掉；
+    // 但不能再說「只回提到的 key」—— 那句話與 required 打架
     val desc = schema.str("description")
     assertTrue(desc.contains("LifePath content"), desc)
-    assertTrue(desc.contains("only return mentioned enum keys"), desc)
+    assertFalse(desc.contains("only return mentioned"), desc)
   }
 
   @Test
