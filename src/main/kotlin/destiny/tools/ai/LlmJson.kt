@@ -4,7 +4,6 @@
 package destiny.tools.ai
 
 import kotlinx.serialization.DeserializationStrategy
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
@@ -21,7 +20,6 @@ import kotlinx.serialization.json.Json
  * - [strict]：測試 / 體檢用。與 [lenient] **只差** `ignoreUnknownKeys = false`，所以它失敗而
  *   [lenient] 成功時，差別一定是「模型多交了什麼」。[driftReport] 就是這個差集。
  */
-@OptIn(ExperimentalSerializationApi::class)
 object LlmJson {
 
   val lenient: Json = Json {

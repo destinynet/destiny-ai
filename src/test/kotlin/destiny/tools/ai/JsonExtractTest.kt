@@ -3,7 +3,6 @@
  */
 package destiny.tools.ai
 
-import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.Json
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,7 +14,6 @@ import kotlin.test.assertEquals
  */
 class JsonExtractTest {
 
-  @OptIn(ExperimentalSerializationApi::class)
   private val jsonParser = Json { allowTrailingComma = true }
 
   @Test

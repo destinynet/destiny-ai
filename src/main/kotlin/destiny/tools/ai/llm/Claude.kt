@@ -3,11 +3,7 @@
  */
 package destiny.tools.ai.llm
 
-import destiny.tools.ai.ChatOptions
-import destiny.tools.ai.IFunctionDeclaration
-import destiny.tools.ai.InputSchema
-import destiny.tools.ai.ThinkingMode
-import destiny.tools.ai.toInputSchema
+import destiny.tools.ai.*
 import kotlinx.serialization.*
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.buildClassSerialDescriptor
@@ -83,7 +79,6 @@ class Claude {
      * [signature] 是 Anthropic 的驗證用簽章：在 tool-use 往返裡把 assistant 的 content
      * 原樣回送時，**必須連簽章一起送回**，否則 API 會拒絕。
      */
-    @OptIn(ExperimentalSerializationApi::class)
     @Serializable
     @SerialName("thinking")
     data class Thinking(
