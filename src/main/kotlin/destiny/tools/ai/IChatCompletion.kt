@@ -232,12 +232,8 @@ abstract class AbstractChatCompletion : IChatCompletion {
           if (formatSpec.kClass == String::class) {
             processedString as T
           } else {
-            val parsed = json.decodeFromString(serializer, processedString)
-            if (parsed is IProviderModel) {
-              (parsed as IProviderModel).withProviderModel(provider, model) as T
-            } else {
-              parsed
-            }
+            // provider / model 住在 Reply.Normal 的信封上，不塞進 DTO —— 塞進去會反射進 schema 要模型填
+            json.decodeFromString(serializer, processedString)
           }
         } catch (e: SerializationException) {
           logger.warn(e) { "Failed to deserialize content from $model (serializer: ${serializer.descriptor.serialName}). Content: $processedString" }
