@@ -20,10 +20,15 @@ data class JsonSchemaSpec(
  *
  * ## 為什麼需要它
  *
- * `IChatCompletion.chatComplete` 收得到 [JsonSchemaSpec]，但**十二個 chat impl 裡只有三個**
- * （OpenAi / Mistral / XiaoMi）真的把它放進 request；Groq 降級成 `response_format: json_object`
- * （schema 本身丟掉），Claude / Gemini / Cohere / Reka / Cerebras / Together / Xai / Deepseek
- * 則是簽名收下就沒有下文。
+ * `IChatCompletion.chatComplete` 收得到 [JsonSchemaSpec]，但十二個 chat impl 對它的處置差很多
+ * （2026-09-09 現況）：
+ *
+ * | 處置 | impl |
+ * |---|---|
+ * | 送出完整 schema | OpenAi、Mistral（`response_format: json_schema`）、Gemini（`responseSchema`）、Claude（`output_config.format`） |
+ * | 只開 JSON mode，schema 丟掉 | Groq、XiaoMi（`response_format: json_object`） |
+ * | 刻意不開 | Deepseek（實測 `json_object` 反而讓品質變差，見 `DeepseekImpl` 的 KDoc） |
+ * | 簽名收下就沒有下文 | Cohere、Reka、Cerebras、Together、Xai |
  *
  * 而提示詞那側原本寫的是
  *
@@ -37,10 +42,10 @@ data class JsonSchemaSpec(
  * 這條路（它自承 "quite unreliable"，但至少模型看得到欄位）；spring-ai 的
  * `BeanOutputConverter.getFormat()` 更是**預設**就走這條，其樣板的最後一行正是本函式的出處。
  *
- * ⚠️ **對已經原生送出 schema 的三家（OpenAi / Mistral / XiaoMi）這是重複的 token。**
+ * ⚠️ **對已經原生送出 schema 的四家（OpenAi / Mistral / Gemini / Claude）這是重複的 token。**
  * 這是刻意的取捨：digest 階段拿不到 provider，而「少數人多付一點 token」遠優於
- * 「多數人完全不知道要填什麼」。等 Claude / Gemini 的原生 structured output 接上之後，
- * 才有條件改成 provider-aware 的開關。
+ * 「多數人完全不知道要填什麼」。要改成 provider-aware 的開關，需要一個
+ * per-model 的能力宣告（audit §7.3：`Capability.JSON_SCHEMA`）—— 那件事還沒做。
  *
  * 用裸 ``` 圍籬（不寫 ```json）—— 同一段指令的下一句要求模型「把輸出的 ```json 拿掉」，
  * 圍籬標成 json 會讓那兩句互相打架。

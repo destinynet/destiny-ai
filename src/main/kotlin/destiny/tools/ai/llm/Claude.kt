@@ -232,11 +232,14 @@ class Claude {
 
 
   /**
-   * request 的 `output_config`。目前只用 `effort`（GA，無 beta header）：控制思考深度與整體 token 支出，
-   * 對 4.6 世代以上有效；配 adaptive thinking 是官方建議的成本／品質槓桿。
+   * request 的 `output_config`（GA，無 beta header）。兩個用途各自獨立，可單獨出現：
+   *
+   * - [effort]：控制思考深度與整體 token 支出，對 4.6 世代以上有效；配 adaptive thinking
+   *   是官方建議的成本／品質槓桿。
+   * - [format]：原生 structured output。
    */
   @Serializable
-  data class OutputConfig(val effort: Effort? = null) {
+  data class OutputConfig(val effort: Effort? = null, val format: Format? = null) {
     @Serializable
     enum class Effort {
       @SerialName("low") LOW,
@@ -244,6 +247,20 @@ class Claude {
       @SerialName("high") HIGH,
       @SerialName("xhigh") XHIGH,
       @SerialName("max") MAX,
+    }
+
+    /**
+     * `output_config.format` —— schema 從「提示詞裡的請求」變成「API 層的約束」。
+     *
+     * schema 送進來之前必須經過 [destiny.tools.ai.SchemaDialect.CLAUDE] 降級：
+     * 每個 object 都要 `additionalProperties:false`，而數值／長度類約束與 `minItems > 1`
+     * 這一家收不下（見該 enum 的 KDoc）。
+     */
+    @Serializable
+    sealed class Format {
+      @Serializable
+      @SerialName("json_schema")
+      data class JsonSchema(val schema: JsonObject) : Format()
     }
   }
 
@@ -304,6 +321,13 @@ class Claude {
      * 讓後續 turn 打 1 折。null 或空 list 就不送 `system` 欄位。
      */
     val system: List<SystemTextBlock>? = null,
+
+    /**
+     * 原生 structured output 的 format（已降級成 Claude 方言）。由 [ClaudeImpl] 決定要不要給 ——
+     * 判斷需要知道本輪有沒有 function declarations，那是 impl 才有的資訊。
+     */
+    @Transient
+    val outputFormat: OutputConfig.Format? = null,
   ) {
 
     val temperature: Double? = options?.temperature
@@ -316,9 +340,10 @@ class Claude {
 
     /** null → 整個欄位不出現在 payload（`explicitNulls = false`），沿用該 model 的預設 */
     val thinking: ThinkingConfig? = options?.thinking
-    /** null → 不送 `output_config`（effort 沿用 model 預設 `high`）。 */
+    /** 兩者皆 null → 整個 `output_config` 不出現（effort 沿用 model 預設 `high`，輸出不受 schema 約束）。 */
     @SerialName("output_config")
-    val outputConfig: OutputConfig? = options?.effort?.let { OutputConfig(it) }
+    val outputConfig: OutputConfig? = OutputConfig(options?.effort, outputFormat)
+      .takeIf { it.effort != null || it.format != null }
   }
 
   @Serializable

@@ -9,6 +9,7 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNames
 
 
@@ -135,7 +136,22 @@ class Gemini {
        * 才會在 response parts 回 [Content.Part.inlineData]。null（預設）不序列化 —— 純文字行為不變。
        * https://ai.google.dev/gemini-api/docs/image-generation
        */
-      val responseModalities: List<String>? = null
+      val responseModalities: List<String>? = null,
+      /**
+       * 開 JSON mode。與 [responseSchema] 成對出現 —— 只給 schema 而不給 mimeType，
+       * Gemini 會忽略 schema 照樣回散文。
+       */
+      val responseMimeType: String? = null,
+      /**
+       * 原生 structured output 的 schema（OpenAPI 3.0 子集，**不是**完整 JSON Schema）。
+       *
+       * 送進來之前必須經過 [destiny.tools.ai.SchemaDialect.GEMINI] 降級：
+       * canonical schema 帶的 `additionalProperties` 會讓這個 endpoint 直接
+       * 400 `INVALID_ARGUMENT`，`format` 也只收白名單內的值。
+       *
+       * ⚠️ 與 [Request.tools] 互斥 —— function calling 與 JSON mode 不能同時開。
+       */
+      val responseSchema: JsonObject? = null,
     ) {
 
       enum class ThinkingLevel {
