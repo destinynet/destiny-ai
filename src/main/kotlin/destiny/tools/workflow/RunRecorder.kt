@@ -17,8 +17,8 @@ import java.util.concurrent.atomic.AtomicInteger
 /**
  * 帳本的一筆分錄：單通 AI 呼叫擷取到的用量 + 當下算好的成本 + 使用的 provider/model + 是哪一段發的。
  *
- * 引擎在拿到 reply 的當下建構它；destiny-ai 只定義語彙與聚合，**計價的執行**（catalog 查表）在
- * impl 端（`ModelCostService`），與 [ExecutionMetadata.costUsd]、[SegmentUsage.costUsd] 的分工一致。
+ * 引擎在拿到 reply 的當下建構它；本類只定義語彙與聚合，**計價的執行**（catalog 查表）在
+ * [destiny.tools.ai.ModelCostService]，與 [ExecutionMetadata.costUsd]、[SegmentUsage.costUsd] 的分工一致。
  */
 data class CallUsage(
   val segmentId: SegmentId,

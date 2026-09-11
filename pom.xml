@@ -60,5 +60,10 @@
       <artifactId>logback-classic</artifactId>
       <scope>test</scope>
     </dependency>
+    <!-- DefaultExecutionEngine 的測試需要 mock IChatOrchestrator / ModelCostService -->
+    <dependency>
+      <groupId>io.mockk</groupId>
+      <artifactId>mockk-jvm</artifactId>
+    </dependency>
   </dependencies>
 </project>
