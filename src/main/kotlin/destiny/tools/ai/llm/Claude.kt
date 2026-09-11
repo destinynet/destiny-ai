@@ -323,6 +323,16 @@ class Claude {
      */
     @Transient
     val outputFormat: OutputConfig.Format? = null,
+
+    /**
+     * `true` 時 Anthropic 改以 SSE 逐塊回傳（見 [Stream]）。
+     *
+     * ⚠️ 型別是 `Boolean?` 而非 `Boolean = false`，這是刻意的。`ClaudeImpl` 的 `Json` 設定是
+     * `encodeDefaults = true` + `explicitNulls = false` —— 寫成 `Boolean = false` 會讓
+     * **既有的每一個非串流 request** 都多帶一個 `"stream": false`；用 nullable 並預設 null
+     * 才會整個欄位省略，非串流路徑的 request JSON 一個位元組都不變。
+     */
+    val stream: Boolean? = null,
   ) {
 
     val temperature: Double? = options?.temperature
@@ -368,6 +378,101 @@ class Claude {
 
   }
 
+
+  /**
+   * `stream: true` 時 Anthropic 以 SSE 回傳的事件。官方文件：
+   * https://platform.claude.com/docs/en/api/messages-streaming
+   *
+   * ## 為什麼不做成一個 sealed class
+   *
+   * 因為**未知的事件型別必須能安全忽略**。Anthropic 明講 client 要容忍新增的 event type
+   * （現有的 `ping` 就是一例，未來還會有）。kotlinx 的多型反序列化遇到不認識的 discriminator
+   * 會整個拋例外 —— 那在一次性回應只是解不開一份 JSON，在串流卻是**講到一半整條斷掉**，
+   * 而且已經 emit 出去的內容收不回來。
+   *
+   * 所以解析端（`ClaudeImpl`）的做法是：先把每個 `data:` 解成 [kotlinx.serialization.json.JsonObject]、
+   * 讀出 `type` 自行分派，認得的才用下面的 DTO 解，不認得的丟掉。本物件只提供「認得的那幾種」
+   * 的形狀，不負責窮舉。
+   *
+   * 同理，[ContentBlockStart.contentBlock] 與 [ContentBlockDelta.delta] 都留成 JsonObject：
+   * content block 的種類（text / thinking / tool_use / …）與 delta 的種類（text_delta /
+   * thinking_delta / input_json_delta / signature_delta / citations_delta / …）都還在長。
+   */
+  object Stream {
+
+    /** 事件信封的 `type` 值。 */
+    object EventType {
+      const val MESSAGE_START = "message_start"
+      const val CONTENT_BLOCK_START = "content_block_start"
+      const val CONTENT_BLOCK_DELTA = "content_block_delta"
+      const val CONTENT_BLOCK_STOP = "content_block_stop"
+      const val MESSAGE_DELTA = "message_delta"
+      const val MESSAGE_STOP = "message_stop"
+      const val ERROR = "error"
+    }
+
+    /** `content_block.type` / `delta.type` 的值。 */
+    object BlockType {
+      const val TEXT = "text"
+      const val THINKING = "thinking"
+      const val TOOL_USE = "tool_use"
+
+      const val TEXT_DELTA = "text_delta"
+      const val THINKING_DELTA = "thinking_delta"
+      const val INPUT_JSON_DELTA = "input_json_delta"
+    }
+
+    /**
+     * 串流的用量。**每個欄位都是 nullable** —— 與一次性回應的 [Response.Usage] 不同：
+     * `message_start` 帶 input 與 cache 數字（output 此時尚為預估值），真正的 output_tokens
+     * 要等 `message_delta`。硬要非 null 會在解析時炸掉。
+     */
+    @Serializable
+    data class Usage(
+      @SerialName("input_tokens") val inputTokens: Int? = null,
+      @SerialName("output_tokens") val outputTokens: Int? = null,
+      @SerialName("cache_creation_input_tokens") val cacheCreationInputTokens: Int? = null,
+      @SerialName("cache_read_input_tokens") val cacheReadInputTokens: Int? = null,
+    )
+
+    @Serializable
+    data class MessageStart(val message: StartedMessage) {
+      @Serializable
+      data class StartedMessage(
+        val id: String? = null,
+        val model: String? = null,
+        val usage: Usage? = null,
+      )
+    }
+
+    @Serializable
+    data class ContentBlockStart(
+      val index: Int,
+      @SerialName("content_block") val contentBlock: JsonObject,
+    )
+
+    @Serializable
+    data class ContentBlockDelta(
+      val index: Int,
+      val delta: JsonObject,
+    )
+
+    @Serializable
+    data class ContentBlockStop(val index: Int)
+
+    /** 收尾事件：帶 `stop_reason` 與**真正的** output_tokens。 */
+    @Serializable
+    data class MessageDelta(
+      val delta: Delta,
+      val usage: Usage? = null,
+    ) {
+      @Serializable
+      data class Delta(@SerialName("stop_reason") val stopReason: String? = null)
+    }
+
+    @Serializable
+    data class ErrorEvent(val error: Response.Error)
+  }
 
   @Serializable
   data class Function(val name: String, val description: String, @SerialName("input_schema") val inputSchema: InputSchema)

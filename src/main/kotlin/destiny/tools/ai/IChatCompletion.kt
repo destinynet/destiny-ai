@@ -152,6 +152,18 @@ abstract class AbstractChatCompletion : IChatCompletion {
   abstract suspend fun doChatComplete(model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>, timeout: Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec? = null, maxFunctionCallDepth: Int = IChatCompletion.DEFAULT_MAX_FUNCTION_CALL_DEPTH): Reply<String>
 
   override suspend fun chatComplete(model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>, timeout: Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec?, maxFunctionCallDepth: Int): Reply<String> {
+    val (finalMsgs, filteredFunCalls) = prepareRequest(messages, funCalls)
+    return doChatComplete(model, finalMsgs, user, filteredFunCalls, timeout, chatOptions, jsonSchema, maxFunctionCallDepth)
+  }
+
+  /**
+   * 送出前的共同前處理：過濾 funCalls、合併相鄰同 role 訊息、把 funCall 提示詞附到最後一則。
+   *
+   * 抽出來是為了讓**串流路徑**（[IStreamingChatCompletion.streamChatComplete]）用同一份邏輯。
+   * 兩條路徑若各做各的，同一份輸入在串流與非串流下會產生不同的 request —— 那種差異不會有
+   * 測試抓到（兩邊各自都「正常」），只會在使用者比對兩種模式的輸出時才浮現。
+   */
+  protected fun prepareRequest(messages: List<Msg>, funCalls: Set<IFunctionDeclaration>): PreparedRequest {
     val filteredFunCalls = funCalls.filter { it.applied(messages) }.toSet()
 
     val finalMsgs = messages.fold(mutableListOf<Msg>()) { acc, msg ->
@@ -201,8 +213,11 @@ abstract class AbstractChatCompletion : IChatCompletion {
       )
     }
 
-    return doChatComplete(model, finalMsgs, user, filteredFunCalls, timeout, chatOptions, jsonSchema, maxFunctionCallDepth)
+    return PreparedRequest(finalMsgs, filteredFunCalls)
   }
+
+  /** [prepareRequest] 的產出：前處理過的訊息，以及**實際適用**於本輪的 function declarations。 */
+  protected data class PreparedRequest(val messages: List<Msg>, val funCalls: Set<IFunctionDeclaration>)
 
   @Suppress("UNCHECKED_CAST")
   override suspend fun <T : Any> typedChatComplete(

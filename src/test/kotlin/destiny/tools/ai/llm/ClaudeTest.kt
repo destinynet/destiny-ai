@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Nested
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
@@ -145,6 +146,42 @@ class ClaudeTest {
    * - 頂層 `system` 陣列 + `cache_control: ephemeral`
    * - `Content.Text` 也支援 `cache_control`（給 cacheable user message 用）
    */
+  /**
+   * `stream` 欄位的序列化 —— 守的是「加了串流之後，**非串流**路徑送出的 request 一個位元組都沒變」。
+   *
+   * 這件事沒有別的測試守得住：本檔其他測試都是用 JsonPath 斷言個別欄位，多冒出一個
+   * `"stream": false` 它們照樣全綠。而 `ClaudeImpl` 的 Json 設定是 `encodeDefaults = true`
+   * ——若把欄位宣告成 `Boolean = false`，那個 `false` 會被序列化進**每一個**既有請求。
+   * 靠的是 `explicitNulls = false` 把 null 整個欄位省略，所以型別必須是 `Boolean?`。
+   */
+  @Nested
+  inner class StreamFieldSerialization {
+
+    @Test
+    fun `不設 stream 時 payload 完全不帶這個欄位`() {
+      val chatModel = Claude.ChatModel(
+        messages = listOf(Claude.ClaudeMessage.TextContent("user", "hi")),
+        model = "claude-sonnet-5",
+        maxTokens = 1024,
+      )
+      val serialized = json.encodeToString(Claude.ChatModel.serializer(), chatModel)
+      logger.info { "serialized: $serialized" }
+      assertFalse(serialized.contains("stream"), "非串流請求不該出現 stream 欄位：$serialized")
+    }
+
+    @Test
+    fun `stream = true 時送出 true`() {
+      val chatModel = Claude.ChatModel(
+        messages = listOf(Claude.ClaudeMessage.TextContent("user", "hi")),
+        model = "claude-sonnet-5",
+        maxTokens = 1024,
+        stream = true,
+      )
+      val serialized = json.encodeToString(Claude.ChatModel.serializer(), chatModel)
+      assertEquals(true, JsonPath.parse(serialized).read("$.stream"))
+    }
+  }
+
   @Nested
   inner class PromptCachingSerialization {
 
