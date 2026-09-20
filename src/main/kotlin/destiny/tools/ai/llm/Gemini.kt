@@ -9,8 +9,8 @@ import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNames
+import kotlinx.serialization.json.JsonObject
 
 
 class Gemini {
@@ -159,7 +159,7 @@ class Gemini {
       }
       /**
        * thinkingBudget: -1 = dynamic（模型自行決定），0 = 關閉 thinking，>0 = 指定 token 上限。
-       * includeThoughts 只有在 thinking 已啟用時才合法；對 thinking 預設關閉的 model（如 gemini-2.5-flash-lite）
+       * includeThoughts 只有在 thinking 已啟用時才合法；對 thinking 預設關閉的 model（如 gemini-2.5-flash-lite, deprecated）
        * 若硬送 includeThoughts=true 會 error: "include_thoughts is only enabled when thinking is enabled"。
        */
       @Serializable
