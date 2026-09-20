@@ -1,5 +1,7 @@
 package destiny.tools.ai
 
+import kotlinx.serialization.Serializable
+import kotlin.reflect.typeOf
 import mu.KotlinLogging
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.boolean
@@ -733,4 +735,39 @@ class JsonToolsTest {
       assertFalse(n.containsKey("maxItems"))
     }
   }
+  /**
+   * 🔴 `Set<T>` 要產出 array，不是一個帶 `size` 的物件。
+   *
+   * 2026-09-20 實測到的：產生器只認 `List` 與 `Array`，`Set` 因此掉到
+   * 「任意物件」那一支，反射出它的 `size` 屬性 ——
+   *
+   * ```
+   * {"type":"object","properties":{"size":{"type":"integer"}},"required":["size"]}
+   * ```
+   *
+   * 而那個 schema 是**送給模型看的**。症狀不是解析失敗（該欄非 required，模型會略過），
+   * 是模型收到一份自相矛盾的規格：FIELD_GUIDANCE 的範例是陣列、schema 說是物件。
+   * 實跑時模型自己回報了這個衝突。
+   */
+  @Nested
+  inner class Sets {
+
+    @Test
+    fun `Set 與 List 產出同一種 schema`() {
+      val schema = typeOf<WithSet>().toJsonSchema("with_set", "test").schema
+      val props = schema["properties"]!!.jsonObject
+      val tags = props["tags"]!!.jsonObject
+      val items = props["items"]!!.jsonObject
+
+      assertEquals("array", tags["type"]!!.jsonPrimitive.content, "Set 應該是 array")
+      assertEquals(items["type"], tags["type"])
+      assertEquals(items["items"], tags["items"], "元素型別也要一致")
+      assertFalse(tags.containsKey("properties"), "不該反射出 Set 自己的 size 屬性")
+    }
+  }
+
 }
+
+/** 見 `JsonToolsTest.Sets` —— inner class 裡不能宣告 class，所以放在檔案層 */
+@Serializable
+data class WithSet(val tags: Set<String>, val items: List<String>)

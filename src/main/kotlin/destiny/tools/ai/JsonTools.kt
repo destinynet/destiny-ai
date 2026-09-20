@@ -70,7 +70,7 @@ fun KType.toJsonSchemaType(): String {
     t.isSubtypeOf(typeOf<Int>()) || t.isSubtypeOf(typeOf<Long>())         -> "integer"
     t.isSubtypeOf(typeOf<Float>()) || t.isSubtypeOf(typeOf<Double>())     -> "number"
     t.isSubtypeOf(typeOf<Boolean>())                                      -> "boolean"
-    t.isSubtypeOf(typeOf<List<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) -> "array"
+    t.isSubtypeOf(typeOf<Collection<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) -> "array"
     t.isSubtypeOf(typeOf<Map<*, *>>())                                    -> "object"
     // Date/Time types
     t.isSubtypeOf(typeOf<java.time.LocalDate>())                          -> "string"
@@ -100,7 +100,7 @@ fun KType.toJsonSchemaType(): String {
  */
 fun KType.toJsonSchemaItemType(): String? {
   val t = this.withNullability(false)
-  if (!t.isSubtypeOf(typeOf<List<*>>()) && !t.isSubtypeOf(typeOf<Array<*>>())) return null
+  if (!t.isSubtypeOf(typeOf<Collection<*>>()) && !t.isSubtypeOf(typeOf<Array<*>>())) return null
   val arg = t.arguments.firstOrNull()?.type ?: return null
   return arg.toJsonSchemaType()
 }
@@ -237,7 +237,7 @@ fun KType.toJsonSchema(name: String, description: String? = null): JsonSchemaSpe
     t.isSubtypeOf(typeOf<Map<*, *>>())                                    ->
       buildJsonObject { handleMapType(t, visited) }
 
-    t.isSubtypeOf(typeOf<List<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) ->
+    t.isSubtypeOf(typeOf<Collection<*>>()) || t.isSubtypeOf(typeOf<Array<*>>()) ->
       buildJsonObject { handleCollectionType(t, visited) }
 
     // ListContainer 是本專案自己的「陣列包一層」容器，`FormatSpec.of` 早就為它的
@@ -347,7 +347,7 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
           handleMapType(propertyType, visited)
         }
         // Handle List/Array types
-        else if (propertyType.isSubtypeOf(typeOf<List<*>>()) || propertyType.isSubtypeOf(typeOf<Array<*>>())) {
+        else if (propertyType.isSubtypeOf(typeOf<Collection<*>>()) || propertyType.isSubtypeOf(typeOf<Array<*>>())) {
           handleCollectionType(propertyType, visited)
           // 長度限制只有掛在集合屬性上才有意義 —— 掛在別處靜默忽略（見 [Size] 的 KDoc）
           property.findAnnotation<Size>()?.also { sz ->
@@ -446,7 +446,7 @@ private fun JsonObjectBuilder.addValueTypeSchema(nullableValueType: KType?, visi
   if (valueType != null) {
     val valueClassifier = valueType.classifier
     when {
-      valueType.isSubtypeOf(typeOf<List<*>>()) || valueType.isSubtypeOf(typeOf<Array<*>>()) ->
+      valueType.isSubtypeOf(typeOf<Collection<*>>()) || valueType.isSubtypeOf(typeOf<Array<*>>()) ->
         handleCollectionType(valueType, visited)
 
       valueType.toJsonSchemaType() == "object" && valueClassifier is KClass<*>              ->
