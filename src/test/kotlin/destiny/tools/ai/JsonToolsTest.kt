@@ -150,6 +150,29 @@ class JsonToolsTest {
       assertEquals("date-time", prop["format"]!!.jsonPrimitive.content)
     }
 
+    /**
+     * `LocalTime` 原本不在任何分支裡，掉進 `else -> "object"` 被反射展開成
+     * `{hour:{}, minute:{}, nano:int, second:{}}`（JVM 的 byte 變空物件）——
+     * 有模型收下（等於逼它把時、分交成 `{}`），也有模型直接 400
+     * （`Empty schema ({}) that accepts any JSON value is not supported`）。
+     *
+     * 刻意**不給** `format`：JSON Schema 的 `time` 是 RFC 3339 full-time，**帶時區偏移**（`15:30:45Z`），
+     * 而 `LocalTimeSerializer` 用 `ISO_LOCAL_TIME` 解析，偏移會直接解析失敗。
+     */
+    @Test
+    fun `LocalTime maps to plain string without format`() {
+      data class LocalTimeHolder(val time: java.time.LocalTime, val hourMinute: java.time.LocalTime?)
+      val spec = LocalTimeHolder::class.toJsonSchema("LocalTimeHolder", null)
+      val props = spec.schema["properties"]!!.jsonObject
+      logger.info { "LocalTime schema: $props" }
+      listOf("time", "hourMinute").forEach { name ->
+        val prop = props[name]!!.jsonObject
+        assertEquals("string", prop["type"]!!.jsonPrimitive.content, "$name should be a string")
+        assertFalse(prop.containsKey("format"), "$name should not have format (time 帶偏移，ISO_LOCAL_TIME 解不了)")
+        assertFalse(prop.containsKey("properties"), "$name must not be reflected into LocalTime's internal fields")
+      }
+    }
+
     @Test
     fun `java util Date should have format date-time`() {
       data class UtilDateHolder(val date: java.util.Date)
@@ -566,11 +589,42 @@ class JsonToolsTest {
   /** 欄位刻意反字母序宣告 —— 字母序會排成 alpha/mango/zebra，宣告序才是 zebra/alpha/mango */
   data class DeclOrder(val zebra: String, val alpha: Int, val mango: Boolean)
 
-  /** 建構子參數 ＋ body 屬性：body 屬性（字母序）附在建構子參數（宣告序）之後 */
+  /**
+   * 建構子參數 ＋ body 屬性：body 屬性（字母序）附在建構子參數（宣告序）之後。
+   *
+   * `bravo` 必須是**有 backing field** 的 body 屬性 —— 純 getter（`get() = …`）不進 schema，
+   * 見 [ComputedGetterTest]。
+   */
   @Suppress("unused")
   class WithBodyProp(val zulu: String, val echo: Int) {
-    val bravo: String get() = "$zulu-$echo"
+    val bravo: String = "$zulu-$echo"
   }
+
+  /** 介面的預設 getter —— `ExtractedEvents` 從 `IBirthDataNamePlace` 繼承 `location`／`time` 的那種 */
+  interface HasDerived {
+    val born: String
+    val derivedFromInterface: java.time.ZoneId get() = java.time.ZoneId.of("UTC")
+  }
+
+  @Suppress("unused")
+  data class WithComputed(override val born: String, val stored: Int) : HasDerived {
+    val bodyStored: String = "x"
+    val bodyComputed: Pair<Double, Double> get() = 1.0 to 2.0
+  }
+
+  /**
+   * sealed 基底的 **abstract** 屬性在基底類別上也沒有 backing field（欄位在子類別裡），
+   * 但它們正是清單元素的 schema —— `ExtractedEvents.events: List<AbstractEvent>` 就是這個形狀。
+   */
+  @Suppress("unused")
+  sealed class SealedBase {
+    abstract val kind: String
+    abstract val note: String?
+    val computedOnBase: Int get() = 0
+  }
+
+  @Suppress("unused")
+  data class SealedLeaf(override val kind: String, override val note: String?) : SealedBase()
 
   data class WithDefaults(
     val gate: Int,                       // 無預設、非 null → required
@@ -615,6 +669,35 @@ class JsonToolsTest {
       logger.info { "schema: $schema" }
       assertEquals(listOf("zulu", "echo", "bravo"), schema["properties"]!!.jsonObject.keys.toList(),
         "建構子參數（宣告序）在前，body 屬性附於其後")
+    }
+  }
+
+  /**
+   * 沒有 backing field 的屬性（純 getter、介面預設 getter）**不進 schema**：
+   * kotlinx.serialization 本來就不序列化它們，要模型交出來只是白寫；而它們的型別
+   * （`ZoneId`、`ChronoLocalDateTime`、`Pair`…）被反射展開後會產出空 schema `{}`，
+   * Claude Opus 5.5 對此直接 400（2026-09-28 `celebrity` 的 `ExtractedEvents` 就是這樣）。
+   */
+  @Nested
+  inner class ComputedGetterTest {
+
+    @Test
+    fun `properties without backing field are excluded`() {
+      val schema = WithComputed::class.toJsonSchema("WithComputed").schema
+      logger.info { "schema: $schema" }
+      assertEquals(listOf("born", "stored", "bodyStored"), schema["properties"]!!.jsonObject.keys.toList(),
+        "建構子參數與有 backing field 的 body 屬性留下；純 getter 與介面預設 getter 拿掉")
+      assertEquals(listOf("born", "stored", "bodyStored"),
+        schema["required"]!!.jsonArray.map { it.jsonPrimitive.content },
+        "required 也不得要求模型交出不會被反序列化的欄位")
+    }
+
+    @Test
+    fun `abstract properties of a sealed base are kept`() {
+      val schema = SealedBase::class.toJsonSchema("SealedBase").schema
+      logger.info { "schema: $schema" }
+      assertEquals(listOf("kind", "note"), schema["properties"]!!.jsonObject.keys.toList(),
+        "abstract 屬性在基底上沒有 backing field，但由子類別實作 —— 要留；基底上的純 getter 仍拿掉")
     }
   }
 

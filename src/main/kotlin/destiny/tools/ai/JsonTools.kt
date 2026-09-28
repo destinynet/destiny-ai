@@ -15,6 +15,7 @@ import kotlin.reflect.full.memberProperties
 import kotlin.reflect.full.primaryConstructor
 import kotlin.reflect.full.starProjectedType
 import kotlin.reflect.full.withNullability
+import kotlin.reflect.jvm.javaField
 import kotlin.reflect.typeOf
 
 /**
@@ -79,6 +80,9 @@ fun KType.toJsonSchemaType(): String {
     t.isSubtypeOf(typeOf<java.time.OffsetDateTime>())                     -> "string"
     t.isSubtypeOf(typeOf<java.time.Instant>())                            -> "string"
     t.isSubtypeOf(typeOf<java.util.Date>())                               -> "string"
+    // 沒有這一行，LocalTime 會掉進 else 被反射成 {hour:{}, minute:{}, …}（byte 成了空物件），
+    // 有的模型因此 400。刻意不配 format —— 見 [toJsonSchemaFormat]
+    t.isSubtypeOf(typeOf<java.time.LocalTime>())                          -> "string"
 
     t.isSubtypeOf(typeOf<java.math.BigInteger>()) ||
       t.isSubtypeOf(typeOf<java.math.BigDecimal>())                       -> "string"
@@ -107,6 +111,11 @@ fun KType.toJsonSchemaItemType(): String? {
 
 /**
  * 取得 JSON Schema 的 format 欄位值 (用於日期/時間類型)
+ *
+ * ⚠️ `LocalTime` **刻意不給** `"time"`：JSON Schema 的 `time` 是 RFC 3339 full-time，
+ * **帶時區偏移**（`15:30:45Z`）；本專案的 `LocalTimeSerializer` 用 `ISO_LOCAL_TIME` 解析，
+ * 模型照格式提示補上偏移反而解不了。它只是 `"string"`（見 [toJsonSchemaType]）。
+ *
  * @return format 字串，若非日期類型則回傳 null
  */
 fun KType.toJsonSchemaFormat(): String? {
@@ -153,12 +162,24 @@ internal fun getEnumSerialName(enumClass: KClass<*>, enumValue: Any): String {
  * 模型依 schema 的 properties 順序產出欄位，字母序讓「先寫對照組、結論最後寫」這類
  * 順序要求只能靠欄位名碰巧排前面（`RetrospectiveReport.baseline` 曾經就是這樣活著的）。
  * 改依宣告序之後，**DTO 作者排的欄位順序就是 LLM 的生成順序**，順序成為可設計的東西。
+ *
+ * ## 沒有 backing field 的屬性不算（2026-09-28）
+ *
+ * 純 getter（`val x get() = …`）與**介面的預設 getter** 一律排除：kotlinx.serialization 不序列化它們，
+ * 要模型交出來只是白寫。更糟的是它們常是 JVM 型別 —— `ExtractedEvents` 從 `IBirthDataNamePlace`
+ * 繼承的 `location`／`time`／`gmtJulDay` 被反射展開成 `ZoneId`、`ChronoLocalDateTime`、`Pair` 的內部欄位，
+ * 產出空 schema `{}`；Claude Opus 5.5 對此直接 400（`Empty schema ({}) … is not supported`）。
+ *
+ * ⚠️ **abstract 屬性要留**：sealed 基底（`AbstractEvent`）的 `abstract val` 在基底上同樣沒有 backing field，
+ * 欄位在子類別裡 —— 它們正是 `List<AbstractEvent>` 元素的 schema。只拿掉「具體、卻沒有欄位」的那種。
  */
 @PublishedApi
 internal fun KClass<*>.orderedProperties(): List<KProperty1<out Any, *>> {
   val ctorOrder: Map<String, Int> = primaryConstructor?.parameters
     ?.mapIndexedNotNull { i, p -> p.name?.let { it to i } }?.toMap() ?: emptyMap()
-  return memberProperties.sortedWith(compareBy({ ctorOrder[it.name] ?: Int.MAX_VALUE }, { it.name }))
+  return memberProperties
+    .filter { it.name in ctorOrder || it.isAbstract || it.javaField != null }
+    .sortedWith(compareBy({ ctorOrder[it.name] ?: Int.MAX_VALUE }, { it.name }))
 }
 
 fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null): JsonSchemaSpec {
