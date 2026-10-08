@@ -136,7 +136,8 @@ class OpenAi {
       data class Usage(
         @SerialName("prompt_tokens") val promptTokens: Int,
         @SerialName("completion_tokens") val completionTokens: Int? = null,
-        @SerialName("total_tokens") val totalTokens: Int
+        @SerialName("total_tokens") val totalTokens: Int,
+        @SerialName("prompt_tokens_details") val promptTokensDetails: PromptTokensDetails? = null,
       )
     }
   }
@@ -149,6 +150,15 @@ class OpenAi {
       }
     }
   }
+
+  /**
+   * OpenAI 相容 usage 的 `prompt_tokens_details`。`cached_tokens` **包含在** `prompt_tokens` 裡，
+   * 計價時要從 input 扣掉、改以 cacheRead 價計（見 `OpenAiCompatibleChatCompletion`）。
+   */
+  @Serializable
+  data class PromptTokensDetails(
+    @SerialName("cached_tokens") val cachedTokens: Int? = null,
+  )
 
   @Serializable
   data class FunctionDeclaration(val type: String, val function: Function) {

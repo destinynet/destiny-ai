@@ -40,6 +40,8 @@ class XiaoMi {
         val promptTokens: Int,
         @SerialName("completion_tokens")
         val completionTokens: Int,
+        @SerialName("prompt_tokens_details")
+        val promptTokensDetails: OpenAi.PromptTokensDetails? = null,
       )
     }
 

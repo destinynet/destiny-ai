@@ -118,7 +118,9 @@ class Xai {
         @SerialName("completion_tokens")
         val completionTokens: Int,
         @SerialName("total_tokens")
-        val totalTokens: Int
+        val totalTokens: Int,
+        @SerialName("prompt_tokens_details")
+        val promptTokensDetails: OpenAi.PromptTokensDetails? = null,
       )
     }
   }

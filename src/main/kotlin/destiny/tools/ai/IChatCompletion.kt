@@ -153,7 +153,8 @@ abstract class AbstractChatCompletion : IChatCompletion {
 
   override suspend fun chatComplete(model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>, timeout: Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec?, maxFunctionCallDepth: Int): Reply<String> {
     val (finalMsgs, filteredFunCalls) = prepareRequest(messages, funCalls)
-    return doChatComplete(model, finalMsgs, user, filteredFunCalls, timeout, chatOptions, jsonSchema, maxFunctionCallDepth)
+    // 不吃 sampling 參數的 model 在這裡統一拿掉 —— 每個 impl 都經過這裡，不必各自記得呼叫
+    return doChatComplete(model, finalMsgs, user, filteredFunCalls, timeout, resolveSampling(model, chatOptions), jsonSchema, maxFunctionCallDepth)
   }
 
   /**

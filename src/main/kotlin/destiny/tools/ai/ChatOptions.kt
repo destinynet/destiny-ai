@@ -86,7 +86,7 @@ data class ChatOptions(
 
 /**
  * 跨 provider 的推理深度刻度。各 impl 自行映射（Anthropic：`output_config.effort`；
- * OpenAI：`reasoning_effort` 只有 low/medium/high，XHIGH/MAX 由 impl 收斂）。
+ * OpenAI：`reasoning_effort` 只有 low/medium/high，XHIGH/MAX 收斂成 high，且只對 reasoning model 送）。
  */
 enum class Effort {
   LOW, MEDIUM, HIGH, XHIGH, MAX,
