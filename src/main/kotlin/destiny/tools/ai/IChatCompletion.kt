@@ -323,10 +323,12 @@ abstract class AbstractChatCompletion : IChatCompletion {
       chatOptions.temperature?.let { add("temperature=${it.value}") }
       chatOptions.topP?.let { add("topP=${it.value}") }
       chatOptions.topK?.let { add("topK=${it.value}") }
+      // OpenAI reasoning 系列（gpt-6-luna）連 frequency_penalty 也拒收：`'frequency_penalty' is not supported with this model`
+      chatOptions.frequencyPenalty?.let { add("frequencyPenalty=${it.value}") }
     }
     if (dropped.isEmpty()) return chatOptions
     logger.warn { "$provider: $model 不接受 sampling 參數，已忽略 ${dropped.joinToString(", ")}" }
-    return chatOptions.copy(temperature = null, topP = null, topK = null)
+    return chatOptions.copy(temperature = null, topP = null, topK = null, frequencyPenalty = null)
   }
 
   protected fun resolveMaxTokens(model: String, chatOptions: ChatOptions, providerDefault: Int? = null): Int? {

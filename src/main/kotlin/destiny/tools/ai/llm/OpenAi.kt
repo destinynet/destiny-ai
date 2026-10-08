@@ -187,7 +187,16 @@ class OpenAi {
     val maxCompletionTokens: Int? = null,
     val tools: List<FunctionDeclaration>? = null,
     @Transient
-    val jsonSchemaSpec: JsonSchemaSpec? = null
+    val jsonSchemaSpec: JsonSchemaSpec? = null,
+    /**
+     * `none` / `low` / `medium` / `high`；null = 不送（provider 預設）。
+     *
+     * reasoning model 在 `/v1/chat/completions` 上**不能同時推理又帶 tools**（gpt-6-luna 回 400：
+     * `Function tools with reasoning_effort are not supported … set reasoning_effort to 'none'`），
+     * 所以帶 tools 時呼叫端要送 `none`。
+     */
+    @SerialName("reasoning_effort")
+    val reasoningEffort: String? = null,
   ) {
 
     val temperature: Double? = options?.temperature
