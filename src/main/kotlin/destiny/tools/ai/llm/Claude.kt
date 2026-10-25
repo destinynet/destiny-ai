@@ -212,6 +212,14 @@ class Claude {
     @SerialName("disabled")
     data object Disabled : ThinkingConfig()
 
+    /**
+     * 不在回覆前思考，只在工具呼叫之間寫短短的進度（以 thinking block 回傳）。
+     * 部分模型不接受 [Disabled]，要關 thinking 只能送這個。
+     */
+    @Serializable
+    @SerialName("between_tools")
+    data object BetweenTools : ThinkingConfig()
+
     @Serializable
     enum class Display {
       @SerialName("summarized")
