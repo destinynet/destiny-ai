@@ -72,6 +72,10 @@ interface ExecutionProgressListener {
  * @param imageProviderImpl provider → 生圖實作（可選，同上）；回 null 代表該 provider 在我方 stack
  *   無法生圖，orchestrator 會換下一家。
  * @param failurePolicy 同層有 segment 失敗時如何處置尚在跑的兄弟；預設 [FailurePolicy.CANCEL_SIBLINGS]。
+ *
+ * 排程方式另由 [scheduling] 設定（預設 [Scheduling.LAYERED]）—— 刻意不放進建構子：
+ * 建構子帶預設值，多一個參數會改掉合成的 `<init>(…, DefaultConstructorMarker)` 簽章，
+ * 沒重編的下游 jar 會在執行期 `NoSuchMethodError`。
  */
 class DefaultExecutionEngine(
   private val orchestrator: IChatOrchestrator,
@@ -86,6 +90,11 @@ class DefaultExecutionEngine(
 ) : ExecutionEngine {
 
   private val logger = KotlinLogging.logger { }
+
+  private var scheduling: Scheduling = Scheduling.LAYERED
+
+  /** 換排程方式（見 [Scheduling]）；回傳自己，可鏈在建構之後 */
+  fun scheduling(s: Scheduling): DefaultExecutionEngine = apply { scheduling = s }
 
   override suspend fun <R> execute(
     plan: GenerationPlan<R>,
@@ -137,19 +146,22 @@ class DefaultExecutionEngine(
      * totalAiCalls 會與實際呼叫數對不上。要修得動 [executeParallelAiSegment] 的簽名（items 從外面
      * 傳進去、型別得配 star projection），代價大於現況風險，暫記於此。
      */
-    fun countLaunched(segment: Segment) {
+    fun countLaunched(segment: Segment, ctx: SegmentContext) {
       when (segment) {
         is Segment.AiSegment<*> -> recorder.onAiCallsLaunched(1)
-        is Segment.ParallelAiSegment<*, *> -> recorder.onAiCallsLaunched(segment.itemsProvider(context).size)
+        is Segment.ParallelAiSegment<*, *> -> recorder.onAiCallsLaunched(segment.itemsProvider(ctx).size)
         is Segment.ImageSegment -> recorder.onImageCallLaunched()
         else -> {}
       }
     }
 
-    /** 跑一個 segment，順帶記下耗時與已發起的呼叫次數。 */
-    suspend fun runSegment(segment: Segment): SegmentOutput {
+    /**
+     * 跑一個 segment，順帶記下耗時與已發起的呼叫次數。
+     * @param ctx 這一段看得到的 context —— 分層時是共用的 [context]；[Scheduling.DAG] 時是它自己的那一份（只含它的依賴）
+     */
+    suspend fun runSegment(segment: Segment, ctx: SegmentContext): SegmentOutput {
       val (result, duration) = measureTimedValue {
-        executeSegment(segment, context, locale, recorder, ::countLaunched)
+        executeSegment(segment, ctx, locale, recorder) { countLaunched(it, ctx) }
       }
       recorder.onSegmentFinished(segment.id, duration.inWholeMilliseconds)
       completedOutputs[segment.id] = result
@@ -157,29 +169,39 @@ class DefaultExecutionEngine(
     }
 
     return try {
-      // 按層級執行
-      for (layer in plan.executionLayers()) {
-        // 有 segment 要跑的層不需要這行 —— 下面的 coroutineScope/async 本身就是取消檢查點
-        // （已取消時子協程根本不會開始跑）。這行守的是**整層都被跳過**的續跑路徑：`continue`
-        // 一路到底、組裝、回 Success，全程沒有任何 suspension point，呼叫端早已取消也看不出來。
-        currentCoroutineContext().ensureActive()
+      when (scheduling) {
+        Scheduling.LAYERED -> {
+          // 按層級執行
+          for (layer in plan.executionLayers()) {
+            // 有 segment 要跑的層不需要這行 —— 下面的 coroutineScope/async 本身就是取消檢查點
+            // （已取消時子協程根本不會開始跑）。這行守的是**整層都被跳過**的續跑路徑：`continue`
+            // 一路到底、組裝、回 Success，全程沒有任何 suspension point，呼叫端早已取消也看不出來。
+            currentCoroutineContext().ensureActive()
 
-        // 已在 context 內者（initialContext 或上次執行回傳的 partialResults）直接沿用，不重跑 ——
-        // 這就是續跑機制：昂貴的前段（LLM 讀盤／生圖）不會因為後段失敗而重付一次錢。
-        // 跳過的 segment 自然不會進 segmentDurations、也不計入 *Calls（runSegment 根本沒被呼叫），
-        // 與「已發起」的計數口徑一致。
-        val pending = layer.filter { !context.isCompleted(it.id) }
-        // 純短路（空的 pending 跑下去也是空迴圈），正確性不依賴它
-        if (pending.isEmpty()) continue
-        if (pending.size > 1) {
-          // 以 pending 而非 layer 判斷：續跑時整層只剩一支要跑，實際並行度是 1，不該記成一次並行。
-          recorder.onParallelLayer()
+            // 已在 context 內者（initialContext 或上次執行回傳的 partialResults）直接沿用，不重跑 ——
+            // 這就是續跑機制：昂貴的前段（LLM 讀盤／生圖）不會因為後段失敗而重付一次錢。
+            // 跳過的 segment 自然不會進 segmentDurations、也不計入 *Calls（runSegment 根本沒被呼叫），
+            // 與「已發起」的計數口徑一致。
+            val pending = layer.filter { !context.isCompleted(it.id) }
+            // 純短路（空的 pending 跑下去也是空迴圈），正確性不依賴它
+            if (pending.isEmpty()) continue
+            if (pending.size > 1) {
+              // 以 pending 而非 layer 判斷：續跑時整層只剩一支要跑，實際並行度是 1，不該記成一次並行。
+              recorder.onParallelLayer()
+            }
+
+            runLayer(pending) { runSegment(it, context) }
+
+            // 本層（含先前各層）跑完的成果併入 context，供後續層讀取
+            flushCompletedOutputs()
+          }
         }
-
-        runLayer(pending) { runSegment(it) }
-
-        // 本層（含先前各層）跑完的成果併入 context，供後續層讀取
-        flushCompletedOutputs()
+        // 依賴一滿足就開跑（見 Scheduling.DAG）。context 在這段期間只讀，成果先落在 completedOutputs，跑完才併入
+        Scheduling.DAG -> {
+          currentCoroutineContext().ensureActive()
+          runDag(plan, context, completedOutputs, recorder) { seg, ctx -> runSegment(seg, ctx) }
+          flushCompletedOutputs()
+        }
       }
 
       // 組裝最終結果
@@ -207,6 +229,83 @@ class DefaultExecutionEngine(
         metadata = recorder.buildMetadata()
       )
     }
+  }
+
+  /**
+   * [Scheduling.DAG]：每一段在它的依賴都完成後立刻開跑，不等同一「層」的其他段。
+   *
+   * 守住的不變式（與分層相同或更嚴）：
+   * - **可決定性**：每一段只看得到初始 context ＋ 它（遞移）依賴的那幾段 —— 自己的一份 context，
+   *   不是共用的那一份。`dependsOn` 漏寫的 plan 穩定拋 `NoSuchElementException`，不會因誰先跑完而時好時壞
+   *   （分層時「較早的層」都看得到，這裡更嚴，所以是選用、不是預設）。
+   * - **單一寫入者**：[base] 在這段期間只讀；成果寫進 thread-safe 的 [completed]，由呼叫端在結束後併入。
+   * - **用量不漏記**：整個 DAG 在一個 `coroutineScope` 裡，scope 回來時所有子協程都已結束（同 [runLayer]）。
+   * - **失敗政策**：[FailurePolicy.CANCEL_SIBLINGS] ⇒ 任一段失敗即取消其餘；
+   *   [FailurePolicy.AWAIT_SIBLINGS] ⇒ 失敗段的下游不跑，**與它無關的段照樣跑完**、成果進 partialResults；
+   *   全部落地後拋第一個（拓撲序）真正的失敗，其餘掛成 suppressed。
+   */
+  private suspend fun runDag(
+    plan: GenerationPlan<*>,
+    base: SegmentContext,
+    completed: java.util.concurrent.ConcurrentHashMap<SegmentId, SegmentOutput>,
+    recorder: RunRecorder,
+    runSegment: suspend (Segment, SegmentContext) -> SegmentOutput,
+  ) {
+    val pending = plan.topologicalSort().filter { !base.isCompleted(it.id) }
+    if (pending.isEmpty()) return
+    // 「並行層」的口徑與分層相同（同一份 plan、同樣的續跑狀態 ⇒ 同樣的數字），metadata 才比得起來
+    plan.executionLayers().count { layer -> layer.count { !base.isCompleted(it.id) } > 1 }
+      .let { repeat(it) { recorder.onParallelLayer() } }
+
+    val byId = plan.segments.associateBy { it.id }
+    val closures = mutableMapOf<SegmentId, Set<SegmentId>>()
+    fun closure(id: SegmentId): Set<SegmentId> = closures.getOrPut(id) {
+      byId.getValue(id).dependsOn.flatMapTo(mutableSetOf()) { setOf(it) + closure(it) }
+    }
+    pending.forEach { closure(it.id) }   // 先算好：子協程裡只讀，不必同步
+
+    /** 這一段自己的 context：初始的 ＋ 它（遞移）依賴的成果 */
+    fun viewOf(segment: Segment) = MutableSegmentContext().apply {
+      base.completedSegments().forEach { id -> put(id, base.getInternal(id, SegmentOutput::class)) }
+      closures.getValue(segment.id).forEach { id -> completed[id]?.let { put(id, it) } }
+    }
+
+    when (failurePolicy) {
+      FailurePolicy.CANCEL_SIBLINGS -> coroutineScope {
+        val jobs = mutableMapOf<SegmentId, kotlinx.coroutines.Deferred<SegmentOutput>>()
+        // 拓撲序建立 ⇒ 依賴的 Deferred 一定已經在 map 裡
+        pending.forEach { segment ->
+          val deps = segment.dependsOn.mapNotNull { jobs[it] }
+          jobs[segment.id] = async { deps.awaitAll(); runSegment(segment, viewOf(segment)) }
+        }
+        jobs.values.awaitAll()
+      }
+
+      FailurePolicy.AWAIT_SIBLINGS -> {
+        val settled = coroutineScope {
+          val jobs = mutableMapOf<SegmentId, kotlinx.coroutines.Deferred<Result<SegmentOutput>>>()
+          pending.forEach { segment ->
+            val deps = segment.dependsOn.mapNotNull { jobs[it] }
+            jobs[segment.id] = async {
+              // 依賴失敗 ⇒ 這一段不跑（它的失敗不是它自己的，不另記）
+              if (deps.awaitAll().any { it.isFailure }) Result.failure(DependencyFailed)
+              else runCatchingCancellable { runSegment(segment, viewOf(segment)) }
+            }
+          }
+          pending.map { jobs.getValue(it.id) }.awaitAll()
+        }
+        val failures = settled.mapNotNull { it.exceptionOrNull() }.filter { it !== DependencyFailed }
+        failures.firstOrNull()?.also { first ->
+          failures.drop(1).forEach { first.addSuppressed(it) }
+          throw first
+        }
+      }
+    }
+  }
+
+  /** [Scheduling.DAG] ＋ [FailurePolicy.AWAIT_SIBLINGS]：依賴失敗而沒跑的那幾段。只在 [runDag] 內流通，不會拋出去 */
+  private object DependencyFailed : RuntimeException("dependency failed") {
+    private fun readResolve(): Any = DependencyFailed
   }
 
   /**
@@ -469,6 +568,28 @@ class DefaultExecutionEngine(
  * 不是「跑完的東西要不要作廢」。（前提是 `execute` 有回傳：呼叫端取消或 [Error] 逃逸時
  * 兩者都拿不到，見 [ExecutionEngine.execute] 的 @throws。）
  */
+/**
+ * segment 的排程方式（2026-10-28）。
+ */
+enum class Scheduling {
+  /**
+   * 按 [GenerationPlan.executionLayers] 一層一層跑：同一層全部結束，下一層才開始（預設）。
+   * 一段看得到**所有較早層**的成果（即使沒寫在 `dependsOn` 裡）—— 既有的 plan 可能依賴這一點，所以它是預設。
+   */
+  LAYERED,
+
+  /**
+   * 每一段在它的依賴都完成後立刻開跑，不等同一層的其他段。
+   *
+   * 為什麼需要：命例比對的付費報告是「① ∥ ②（八人平行）→ ③④」—— 分層時③④要等①寫完才開始，
+   * 而它只依賴②；中文報告白等 38 秒、韓文 59 秒（2026-10-28 實測）。
+   *
+   * ⚠️ 一段**只看得到它（遞移）依賴的成果**（與初始 context）。`dependsOn` 沒寫齊的 plan 換成這個會拋
+   * `NoSuchElementException` —— 換之前先確認每一段讀的東西都宣告了。
+   */
+  DAG,
+}
+
 enum class FailurePolicy {
   /**
    * fail-fast：立刻取消同層兄弟，盡快回報 [ExecutionResult.Failed]。
