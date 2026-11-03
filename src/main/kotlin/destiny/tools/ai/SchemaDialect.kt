@@ -45,6 +45,8 @@ enum class SchemaDialect {
    * - 不認得 `additionalProperties`（送了直接 400 `INVALID_ARGUMENT`）
    * - `format` 只收白名單（見 [GEMINI_FORMATS]）；本專案的 `LocalDate` 會產出
    *   `"format":"date"`，不在白名單內
+   * - `$ref`／`$defs`（sealed 聯集出現兩次以上時產生器會用，見 `hoistSealedDefs`）是否收下未經實測 ——
+   *   一律在送出前展開回內嵌（[inlineRefs]），等同 `$defs` 出現之前的 schema
    */
   GEMINI,
 
@@ -76,7 +78,7 @@ private val CLAUDE_UNSUPPORTED = setOf("minimum", "maximum", "exclusiveMinimum",
  */
 fun JsonSchemaSpec.render(dialect: SchemaDialect): JsonObject = when (dialect) {
   SchemaDialect.CANONICAL -> schema
-  SchemaDialect.GEMINI    -> schema.transformNodes { it.toGeminiNode(name) }
+  SchemaDialect.GEMINI    -> schema.inlineRefs().transformNodes { it.toGeminiNode(name) }
   SchemaDialect.CLAUDE    -> schema.transformNodes { it.toClaudeNode(name) }
 }
 
@@ -161,14 +163,15 @@ private fun JsonObject.anyNode(pred: (JsonObject) -> Boolean): Boolean {
   (this["items"] as? JsonObject)?.let { if (it.anyNode(pred)) return true }
   (this["additionalProperties"] as? JsonObject)?.let { if (it.anyNode(pred)) return true }
   (this["anyOf"] as? JsonArray)?.forEach { if (it is JsonObject && it.anyNode(pred)) return true }
+  (this[DEFS] as? JsonObject)?.values?.forEach { if (it is JsonObject && it.anyNode(pred)) return true }
   return false
 }
 
 /**
  * 對 schema 樹的每個節點套用 [rule]，先套用本層再遞迴子層。
  *
- * 子層的位置只有四處：`properties` 的每個值、`items`、`additionalProperties`（值型別）、
- * `anyOf` 的每個元素。先套 [rule] 再遞迴是刻意的 —— 這樣 [rule] 新增的
+ * 子層的位置有五處：`properties` 的每個值、`items`、`additionalProperties`（值型別）、
+ * `anyOf` 的每個元素、根節點 `$defs` 的每個定義（`$defs` 本身是容器，不套 [rule]）。先套 [rule] 再遞迴是刻意的 —— 這樣 [rule] 新增的
  * `additionalProperties: false` 不會又被當成子 schema 走一遍。
  */
 private fun JsonObject.transformNodes(rule: (JsonObject) -> JsonObject): JsonObject {
@@ -191,10 +194,38 @@ private fun JsonObject.transformNodes(rule: (JsonObject) -> JsonObject): JsonObj
             value.forEach { add(if (it is JsonObject) it.transformNodes(rule) else it) }
           }
 
+        key == DEFS && value is JsonObject                   ->
+          putJsonObject(DEFS) {
+            value.forEach { (defName, def) -> put(defName, if (def is JsonObject) def.transformNodes(rule) else def) }
+          }
+
         else                                                 -> put(key, value)
       }
     }
   }
+}
+
+private const val DEFS = "\$defs"
+private const val REF_PREFIX = "#/\$defs/"
+
+/**
+ * 把 `{"$ref": "#/$defs/X", …}` 換回 `$defs` 裡 X 的內容（出現處的其他欄位，例如屬性層級的 description，蓋在上面），並拿掉根節點的 `$defs`。
+ * 定義裡的 `$ref` 也一併展開；產生器不產出遞迴的定義（循環參照另以說明物件代替），所以不會無窮展開
+ */
+internal fun JsonObject.inlineRefs(): JsonObject {
+  val defs = this[DEFS] as? JsonObject ?: return this
+  fun inline(e: JsonElement): JsonElement = when (e) {
+    is JsonArray  -> JsonArray(e.map(::inline))
+    is JsonObject -> {
+      val ref = (e["\$ref"] as? JsonPrimitive)?.content
+      if (ref != null && ref.startsWith(REF_PREFIX)) {
+        val def = defs[ref.removePrefix(REF_PREFIX)]?.jsonObject ?: error("dangling \$ref: $ref")
+        JsonObject((inline(def) as JsonObject) + e.filterKeys { it != "\$ref" }.mapValues { (_, v) -> inline(v) })
+      } else JsonObject(e.mapValues { (_, v) -> inline(v) })
+    }
+    else          -> e
+  }
+  return JsonObject((inline(JsonObject(this - DEFS)) as JsonObject))
 }
 
 private fun JsonElement?.jsonPrimitiveContentOrNull(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content

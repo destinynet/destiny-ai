@@ -220,7 +220,7 @@ fun <T : Any> KClass<T>.toJsonSchema(name: String, description: String? = null):
     }
     addRequiredFields(this@toJsonSchema)
     effectiveDescription?.let { put("description", it) }
-  }
+  }.hoistSealedDefs()
 
   return JsonSchemaSpec(name, effectiveDescription, schema)
 }
@@ -283,7 +283,7 @@ fun KType.toJsonSchema(name: String, description: String? = null): JsonSchemaSpe
   val merged = listOfNotNull(description, body["description"]?.jsonPrimitive?.content)
     .distinct().joinToString(" ").ifEmpty { null }
 
-  val schema = merged?.let { JsonObject(body + ("description" to JsonPrimitive(it))) } ?: body
+  val schema = (merged?.let { JsonObject(body + ("description" to JsonPrimitive(it))) } ?: body).hoistSealedDefs()
   return JsonSchemaSpec(name, merged, schema)
 }
 
@@ -592,8 +592,11 @@ private fun JsonObjectBuilder.handleObjectType(objectClass: KClass<*>, visited: 
  * 非 `@Serializable` 的 sealed 類別（找不到 serializer）不走這裡，維持舊行為（只列基底的 abstract 屬性）。
  * `data object` 子類別的分支只有判別欄位。
  *
- * ⚠️ Claude 的 structured output 對整份 schema 有上限：`anyOf`（或 type array）的參數至多 16 個、可省略的參數至多 24 個。
- * 子類別的可省略欄位都算進後者 —— 子類別多、欄位又多是可省略的時候，先數一數
+ * 同一個 sealed 基底在 schema 裡出現兩次以上時，由 [hoistSealedDefs] 搬進 `$defs`、出現處改成 `$ref`（只出現一次就內嵌）。
+ *
+ * ⚠️ Claude 的 structured output 對整份 schema 有上限：`anyOf`（或 type array）的參數至多 16 個、可省略的參數至多 24 個，
+ * 而且編譯後的 grammar 不能太大（`The compiled grammar is too large`）。2026-11-03 實測（destiny-core-impl `ClaudeSealedSchemaTest`）：
+ * 8 種精簡的子類別內嵌 3 次就超過，搬進 `$defs` 就過；子類別各帶 enum 與多個欄位時，6 種就超過 —— 上限看整份 grammar 的大小，不是子類別數
  */
 @OptIn(ExperimentalSerializationApi::class)
 private fun JsonObjectBuilder.handleSealedType(kClass: KClass<*>, visited: MutableSet<KClass<*>>): Boolean {
@@ -614,7 +617,13 @@ private fun JsonObjectBuilder.handleSealedType(kClass: KClass<*>, visited: Mutab
     return true
   }
   try {
-    kClass.findAnnotation<Description>()?.value?.also { put("description", it) }
+    // 暫時的記號：schema 建完後由 [hoistSealedDefs] 決定內嵌或搬進 $defs，並把記號拿掉。
+    // class 層級的 @Description 放在記號裡，不放節點上 —— 屬性層級的 @Description 會蓋掉節點上的 description，兩者要分得開
+    putJsonObject(SEALED_MARK) {
+      put("class", kClass.qualifiedName ?: kClass.toString())
+      put("name", kClass.simpleName ?: "Union")
+      kClass.findAnnotation<Description>()?.value?.also { put("description", it) }
+    }
     putJsonArray("anyOf") {
       // 分支依類別名排序（`sealedSubclasses` 與 kotlinx 的 sealed 描述都是這個順序；執行期拿不到宣告序）
       leaves(kClass).forEach { leaf ->
@@ -640,4 +649,75 @@ private fun JsonObjectBuilder.handleSealedType(kClass: KClass<*>, visited: Mutab
     visited.remove(kClass)
   }
   return true
+}
+
+/** [handleSealedType] 留在 sealed 節點上的暫時記號；[hoistSealedDefs] 處理完就拿掉，不會出現在送出的 schema 裡 */
+private const val SEALED_MARK = "x-destiny-sealed"
+
+/**
+ * 把 [handleSealedType] 標記過的 sealed 聯集收尾：同一個類別出現兩次以上的搬進根節點的 `$defs`（key 是類別的 simple name，撞名時加序號），
+ * 出現處改成 `{"$ref": "#/$defs/X"}`；只出現一次的就地內嵌。記號一律拿掉。
+ *
+ * ## 為什麼
+ *
+ * 星盤導演的腳本裡，同一個「目標」聯集會出現在鏡頭、highlight、每一步的 draw —— 全部內嵌的話，grammar 隨出現次數倍增，
+ * Claude 直接拒收；搬進 `$defs` 之後，同一份 schema 就過了（2026-11-03 實測，見 [handleSealedType]）。
+ *
+ * - class 層級的 `@Description` 放在 `$defs` 的定義上（內嵌時放在節點上，節點自己已有 description 的話以節點的為準）
+ * - 出現處的其他欄位（屬性層級的 `@Description`）留在 `$ref` 旁邊
+ * - 由內往外處理：定義裡的巢狀 sealed 也照同一規則（出現兩次以上就引用）
+ */
+internal fun JsonObject.hoistSealedDefs(): JsonObject {
+  val counts = mutableMapOf<String, Int>()
+  fun count(e: JsonElement) {
+    when (e) {
+      is JsonObject -> {
+        (e[SEALED_MARK] as? JsonObject)?.get("class")?.jsonPrimitive?.content?.also { counts.merge(it, 1, Int::plus) }
+        e.forEach { (k, v) -> if (k != SEALED_MARK) count(v) }
+      }
+      is JsonArray  -> e.forEach(::count)
+      else          -> Unit
+    }
+  }
+  count(this)
+  if (counts.isEmpty()) return this
+
+  val keyOf = mutableMapOf<String, String>()      // class → $defs key
+  val defs = linkedMapOf<String, JsonObject>()    // $defs key → 定義
+
+  fun transform(e: JsonElement): JsonElement = when (e) {
+    is JsonArray  -> JsonArray(e.map(::transform))
+    is JsonObject -> {
+      val children = JsonObject(e.filterKeys { it != SEALED_MARK }.mapValues { (_, v) -> transform(v) })
+      val mark = e[SEALED_MARK] as? JsonObject
+      if (mark == null) children
+      else {
+        val cls = mark["class"]!!.jsonPrimitive.content
+        val classDesc = mark["description"]?.jsonPrimitive?.content
+        if (counts.getValue(cls) < 2) {
+          if (classDesc != null && "description" !in children) JsonObject(children + ("description" to JsonPrimitive(classDesc))) else children
+        } else {
+          val key = keyOf.getOrPut(cls) {
+            val base = mark["name"]!!.jsonPrimitive.content
+            generateSequence(1) { it + 1 }.map { if (it == 1) base else "$base$it" }.first { it !in keyOf.values }
+          }
+          if (key !in defs) {
+            defs[key] = JsonObject(buildMap {
+              classDesc?.also { put("description", JsonPrimitive(it)) }
+              put("anyOf", children["anyOf"]!!)
+            })
+          }
+          // 出現處：$ref ＋ 呼叫端加上的欄位（屬性層級的 description）
+          JsonObject(buildMap {
+            put("\$ref", JsonPrimitive("#/\$defs/$key"))
+            children.forEach { (k, v) -> if (k != "anyOf") put(k, v) }
+          })
+        }
+      }
+    }
+    else          -> e
+  }
+
+  val body = transform(this).jsonObject
+  return if (defs.isEmpty()) body else JsonObject(body + ("\$defs" to JsonObject(defs)))
 }
