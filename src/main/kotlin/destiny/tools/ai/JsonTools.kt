@@ -4,8 +4,11 @@
 package destiny.tools.ai
 
 import mu.KotlinLogging
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.descriptors.PolymorphicKind
 import kotlinx.serialization.json.*
+import kotlinx.serialization.serializerOrNull
 import kotlin.reflect.KClass
 import kotlin.reflect.KProperty1
 import kotlin.reflect.KType
@@ -411,18 +414,21 @@ private fun JsonObjectBuilder.processClassProperties(kClass: KClass<*>, visited:
  * 非建構子屬性維持舊規則（非 nullable → required）。
  */
 private fun JsonObjectBuilder.addRequiredFields(kClass: KClass<*>) {
-  val optionalParams: Set<String> = kClass.primaryConstructor?.parameters
-    ?.filter { it.isOptional }?.mapNotNull { it.name }?.toSet() ?: emptySet()
-
-  val requiredProps = kClass.orderedProperties()
-    .filter { !it.returnType.isMarkedNullable && it.name !in optionalParams }
-    .map { it.findAnnotation<SerialName>()?.value ?: it.name }
-
+  val requiredProps = requiredNames(kClass)
   if (requiredProps.isNotEmpty()) {
     putJsonArray("required") {
       requiredProps.forEach { add(JsonPrimitive(it)) }
     }
   }
+}
+
+/** [addRequiredFields] 的判準：非 nullable 且無預設值的欄位名（`@SerialName` 優先），依宣告序 */
+private fun requiredNames(kClass: KClass<*>): List<String> {
+  val optionalParams: Set<String> = kClass.primaryConstructor?.parameters
+    ?.filter { it.isOptional }?.mapNotNull { it.name }?.toSet() ?: emptySet()
+  return kClass.orderedProperties()
+    .filter { !it.returnType.isMarkedNullable && it.name !in optionalParams }
+    .map { it.findAnnotation<SerialName>()?.value ?: it.name }
 }
 
 // Handle Map type properties, including nested collections and objects
@@ -509,6 +515,8 @@ private fun JsonObjectBuilder.handleArrayOfElement(rawElementType: KType?, visit
         if (elementClassifier in visited) {
           put("type", "object")
           put("description", "Recursive ${elementClassifier.simpleName}: same structure as the enclosing ${elementClassifier.simpleName} object")
+        } else if (handleSealedType(elementClassifier, visited)) {
+          // 可序列化的 sealed 基底：anyOf 各子類別（見 handleSealedType）
         } else {
           // It's a list of objects, detail the object structure
           put("type", "object")
@@ -553,6 +561,8 @@ private fun JsonObjectBuilder.handleObjectType(objectClass: KClass<*>, visited: 
     return
   }
 
+  if (handleSealedType(objectClass, visited)) return
+
   put("type", "object")
   // class 層級的 @Description 作為巢狀物件的說明；屬性層級的 @Description 在外層後放、就近者勝
   objectClass.findAnnotation<Description>()?.value?.also { put("description", it) }
@@ -561,4 +571,73 @@ private fun JsonObjectBuilder.handleObjectType(objectClass: KClass<*>, visited: 
   }
   // Add required fields for the nested object
   addRequiredFields(objectClass)
+}
+
+/**
+ * 可序列化的 sealed 基底 → `anyOf`，每個（非 sealed 的）子類別一個分支。回 false ＝ 不是這種型別，呼叫端照一般物件處理。
+ *
+ * ## 為什麼
+ *
+ * 沒有這一段時，`List<AbstractEvent>` 只產出基底的 abstract 屬性，加上 `additionalProperties:false`，
+ * 只在子類別上的欄位（`date`、`from`／`to`）模型**不被允許**寫，反序列化因而失敗（2026-09-28 Opus 5.5 實跑）。
+ *
+ * ## 兩種聯集
+ *
+ * - **kotlinx 預設的 sealed 序列化**：JSON 帶判別欄位（預設 `type`，可用 `@JsonClassDiscriminator` 改名），值是子類別的 serial name。
+ *   每個分支把判別欄位放在第一個、以單值 `enum` 鎖住、列為 required。值取自子類別 serializer 的 `descriptor.serialName`，
+ *   與反序列化用的是同一個來源（沒有 `@SerialName` 時是完整類別名）
+ * - **基底的 serializer 是 [JsonContentPolymorphicSerializer]**（依內容選子類別，例如「出現哪個 key」）：沒有判別欄位，
+ *   分支就是子類別本身的 object schema。能不能區分由各分支的 required 欄位決定，交給那支 serializer
+ *
+ * 非 `@Serializable` 的 sealed 類別（找不到 serializer）不走這裡，維持舊行為（只列基底的 abstract 屬性）。
+ * `data object` 子類別的分支只有判別欄位。
+ *
+ * ⚠️ Claude 的 structured output 對整份 schema 有上限：`anyOf`（或 type array）的參數至多 16 個、可省略的參數至多 24 個。
+ * 子類別的可省略欄位都算進後者 —— 子類別多、欄位又多是可省略的時候，先數一數
+ */
+@OptIn(ExperimentalSerializationApi::class)
+private fun JsonObjectBuilder.handleSealedType(kClass: KClass<*>, visited: MutableSet<KClass<*>>): Boolean {
+  if (!kClass.isSealed) return false
+  val serializer = serializerOrNull(kClass.starProjectedType) ?: return false
+  val contentBased = serializer is JsonContentPolymorphicSerializer<*>
+  if (!contentBased && serializer.descriptor.kind != PolymorphicKind.SEALED) return false
+
+  val discriminator: String? = if (contentBased) null
+    else kClass.findAnnotation<JsonClassDiscriminator>()?.discriminator ?: "type"
+
+  fun leaves(k: KClass<*>): List<KClass<*>> = k.sealedSubclasses.flatMap { if (it.isSealed) leaves(it) else listOf(it) }
+  fun serialNameOf(leaf: KClass<*>): String = serializerOrNull(leaf.starProjectedType)?.descriptor?.serialName ?: leaf.qualifiedName!!
+
+  if (!visited.add(kClass)) {
+    put("type", "object")
+    put("description", "Recursive ${kClass.simpleName}: same structure as the enclosing ${kClass.simpleName} object")
+    return true
+  }
+  try {
+    kClass.findAnnotation<Description>()?.value?.also { put("description", it) }
+    putJsonArray("anyOf") {
+      // 分支依類別名排序（`sealedSubclasses` 與 kotlinx 的 sealed 描述都是這個順序；執行期拿不到宣告序）
+      leaves(kClass).forEach { leaf ->
+        addJsonObject {
+          put("type", "object")
+          leaf.findAnnotation<Description>()?.value?.also { put("description", it) }
+          val serialName = serialNameOf(leaf)
+          putJsonObject("properties") {
+            discriminator?.also { d ->
+              putJsonObject(d) {
+                put("type", "string")
+                putJsonArray("enum") { add(JsonPrimitive(serialName)) }
+              }
+            }
+            if (leaf.objectInstance == null) processClassProperties(leaf, visited)
+          }
+          val required = listOfNotNull(discriminator) + (if (leaf.objectInstance == null) requiredNames(leaf) else emptyList())
+          if (required.isNotEmpty()) putJsonArray("required") { required.forEach { add(JsonPrimitive(it)) } }
+        }
+      }
+    }
+  } finally {
+    visited.remove(kClass)
+  }
+  return true
 }
