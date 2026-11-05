@@ -38,12 +38,12 @@ class TypedChatCompleteTest {
   }
 
   /** doChatComplete 回一段固定字串的假 impl —— 只測 typed 那一段 */
-  private class CannedChat(private val canned: String) : AbstractChatCompletion() {
+  private class CannedChat(private val canned: String, private val inputTokens: Int? = null, private val outputTokens: Int? = null) : AbstractChatCompletion() {
     override val provider = Provider.OPENAI
     override suspend fun doChatComplete(
       model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>,
       timeout: Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec?, maxFunctionCallDepth: Int
-    ): Reply<String> = Reply.Normal(canned, null, provider, model)
+    ): Reply<String> = Reply.Normal(canned, null, provider, model, inputTokens = inputTokens, outputTokens = outputTokens)
   }
 
   private val reportSpec = FormatSpec.of<Report>("report", "r")
@@ -82,6 +82,15 @@ class TypedChatCompleteTest {
     val reply = run("   ", reportSpec)
     assertIs<Reply.Error.DeserializationFailure>(reply)
     assertTrue(reply.errorMessage.contains("empty"), reply.errorMessage)
+  }
+
+  @Test
+  fun `DeserializationFailure carries the usage of the failed call`() = runTest {
+    val reply = CannedChat("{\"items\":[\"a\",\"b\",\"c\"]}", inputTokens = 120, outputTokens = 30)
+      .typedChatComplete("m", msgs, FormatSpec.of<Bounded>("bounded", "b"), LlmJson.lenient, Locale.TAIWAN, ChatOptions())
+    assertIs<Reply.Error.DeserializationFailure>(reply)
+    assertEquals(120, reply.inputTokens)
+    assertEquals(30, reply.outputTokens)
   }
 
   @Test

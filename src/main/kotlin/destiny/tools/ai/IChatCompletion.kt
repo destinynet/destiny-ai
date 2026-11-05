@@ -43,10 +43,16 @@ sealed class Reply<out T> {
     /** Input/context 太長 —— 改 input 才能解。 */
     data class TooLong(val message: String, override val provider: Provider) : Terminal()
 
+    /**
+     * 回覆拿到了、但轉不成目標型別或沒過驗證。
+     * [inputTokens]／[outputTokens] 是這次呼叫的用量（provider 有給才有）：這次呼叫照樣計費，重試的 caller 要算進成本。
+     */
     data class DeserializationFailure(val errorMessage: String,
                                       val originalContent: String,
                                       override val provider: Provider,
-                                      val model: String) : Terminal()
+                                      val model: String,
+                                      val inputTokens: Int? = null,
+                                      val outputTokens: Int? = null) : Terminal()
 
     data class InvalidApiKey(override val provider: Provider) : Terminal()
 
@@ -248,6 +254,8 @@ abstract class AbstractChatCompletion : IChatCompletion {
           originalContent = content,
           provider = rawReply.provider,
           model = rawReply.model,
+          inputTokens = rawReply.inputTokens,
+          outputTokens = rawReply.outputTokens,
         )
 
         val typedResult: T = if (formatSpec.kClass == String::class) {
