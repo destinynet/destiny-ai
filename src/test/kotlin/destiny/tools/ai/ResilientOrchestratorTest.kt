@@ -7,6 +7,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
 class ResilientOrchestratorTest {
@@ -141,5 +142,33 @@ class ResilientOrchestratorTest {
     }
     assertNull(result)
     assertEquals(0, calls)
+  }
+
+  // ─── 每一次嘗試的用量 ───
+
+  @Test
+  fun `success keeps every attempt with its usage, failed validation included`() = runTest {
+    val orchestrator = ResilientOrchestrator(setOf(pmA), delayBetweenModelLoops = 1.seconds)
+    var calls = 0
+    val o = orchestrator.executeExplained { pm ->
+      calls++
+      if (calls == 1) Reply.Error.DeserializationFailure("missing field", "{}", pm.provider, pm.model, inputTokens = 500, outputTokens = 40)
+      else Reply.Normal("ok", null, pm.provider, pm.model, inputTokens = 520, outputTokens = 60, cacheReadTokens = 7)
+    } as Orchestration.Success
+    assertEquals(2, o.attempts.size)
+    assertEquals(TokenUsage(500, 40), o.attempts[0].usage)
+    assertEquals(TokenUsage(520, 60, null, 7), o.attempts[1].usage)
+    assertNull(o.attempts[1].error)
+    assertEquals(listOf(1, 2), o.attempts.map { it.loop })
+    assertEquals(o.attempts, o.allAttempts)
+  }
+
+  @Test
+  fun `errors without token counts have no usage`() = runTest {
+    val o = ResilientOrchestrator(setOf(pmA), delayBetweenModelLoops = 1.seconds, maxTotalAttempts = 2).executeExplained<String> { pm ->
+      Reply.Error.Busy(pm.provider)
+    } as Orchestration.Exhausted
+    assertEquals(2, o.attempts.size)
+    assertTrue(o.attempts.all { it.usage == null })
   }
 }

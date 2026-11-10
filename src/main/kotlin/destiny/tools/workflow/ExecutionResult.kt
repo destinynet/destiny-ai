@@ -5,6 +5,8 @@
  */
 package destiny.tools.workflow
 
+import destiny.tools.ai.TokenUsage
+
 /**
  * 執行結果
  */
@@ -146,31 +148,3 @@ data class SegmentUsage(
   val modelsUsed: List<UsedModel>
 )
 
-/**
- * Token 使用量（含 cache 維度）。全欄位 nullable：某維度從未收到非 null 值即維持 null（「未知」），
- * 與 [destiny.tools.ai.TokenUsageAccumulator] 的 null 語意一致。
- */
-data class TokenUsage(
-  val inputTokens: Int? = null,
-  val outputTokens: Int? = null,
-  val cacheCreationTokens: Int? = null,
-  val cacheReadTokens: Int? = null
-) {
-  val totalTokens: Int?
-    get() = if (inputTokens == null && outputTokens == null) null
-    else (inputTokens ?: 0) + (outputTokens ?: 0)
-
-  operator fun plus(other: TokenUsage) = TokenUsage(
-    inputTokens = plus(inputTokens, other.inputTokens),
-    outputTokens = plus(outputTokens, other.outputTokens),
-    cacheCreationTokens = plus(cacheCreationTokens, other.cacheCreationTokens),
-    cacheReadTokens = plus(cacheReadTokens, other.cacheReadTokens)
-  )
-
-  /** 兩者皆 null → null（維持未知）；否則 null 視為 0 後相加。 */
-  private fun plus(a: Int?, b: Int?): Int? = if (a == null && b == null) null else (a ?: 0) + (b ?: 0)
-
-  companion object {
-    val ZERO = TokenUsage(0, 0, 0, 0)
-  }
-}

@@ -3,6 +3,8 @@
  */
 package destiny.tools.workflow
 
+import destiny.tools.ai.TokenUsage
+
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue

@@ -14,18 +14,40 @@ import jakarta.inject.Named
 @Named
 class ModelCostService(private val catalog: IModelCatalog) {
 
+  /** 直接吃 [Reply.Normal]，回傳此次呼叫 USD 成本；無法解析則 null。 */
+  fun cost(reply: Reply.Normal<*>): Double? =
+    cost(reply.provider, reply.model, reply.tokenUsage ?: TokenUsage.ZERO)
+
   /**
-   * 直接吃 [Reply.Normal]，回傳此次呼叫 USD 成本；無法解析則 null。
-   * （[Reply.Error] 無 token 計數，呼叫端請先 narrow 成 Normal 再計價）
+   * 任何一次呼叫的成本：成功的、**驗證不過**的（照樣計費）都用這個算。查無計價回 null；缺的維度當 0。
+   * 用量來自 [Orchestration.Attempt.usage] 或 [tokenUsage]。
    */
-  fun cost(reply: Reply.Normal<*>): Double? {
-    val pricing = catalog.getModel(reply.provider, reply.model)?.pricing ?: return null
+  fun cost(provider: Provider, model: String, usage: TokenUsage): Double? {
+    val pricing = catalog.getModel(provider, model)?.pricing ?: return null
     return pricing.cost(
-      input = reply.inputTokens ?: 0,
-      output = reply.outputTokens ?: 0,
-      cacheRead = reply.cacheReadTokens ?: 0,
-      cacheWrite = reply.cacheCreationTokens ?: 0,
+      input = usage.inputTokens ?: 0,
+      output = usage.outputTokens ?: 0,
+      cacheRead = usage.cacheReadTokens ?: 0,
+      cacheWrite = usage.cacheCreationTokens ?: 0,
     )
+  }
+
+  /**
+   * 一次編排（成功或失敗）的總帳：**每一次送出的嘗試**都算，含驗證不過、hedge 輸掉的那幾家。
+   * 用量或價格不明的那幾次不猜，只算進 [OrchestrationUsage.unpricedAttempts]。
+   */
+  fun usage(orchestration: Orchestration<*>): OrchestrationUsage {
+    val attempts = orchestration.allAttempts
+    var tokens: TokenUsage? = null
+    var cost: Double? = null
+    var unpriced = 0
+    attempts.forEach { a ->
+      val u = a.usage
+      val c = u?.let { cost(a.providerModel.provider, a.providerModel.model, it) }
+      if (u != null) tokens = (tokens ?: TokenUsage()) + u
+      if (c == null) unpriced++ else cost = (cost ?: 0.0) + c
+    }
+    return OrchestrationUsage(attempts.size, tokens, cost, unpriced)
   }
 
   /**
@@ -37,3 +59,18 @@ class ModelCostService(private val catalog: IModelCatalog) {
   fun imagePricing(provider: Provider, model: String): ImagePricing? =
     catalog.getModel(provider, model)?.pricing?.image
 }
+
+/**
+ * 一次編排的用量與成本（[ModelCostService.usage]）。
+ *
+ * @param attempts 送出的呼叫數（含用量不明的）
+ * @param tokens 有回報用量的那幾次相加；一次都沒有就是 null
+ * @param costUsd 有用量、也查得到價的那幾次相加；一次都沒有就是 null
+ * @param unpricedAttempts 送出了、但用量或價格不明的次數（例外、逾時、被取消、catalog 沒登記）—— 這幾次可能已計費，金額未知
+ */
+data class OrchestrationUsage(
+  val attempts: Int,
+  val tokens: TokenUsage?,
+  val costUsd: Double?,
+  val unpricedAttempts: Int,
+)

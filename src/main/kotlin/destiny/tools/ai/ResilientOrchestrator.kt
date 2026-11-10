@@ -69,11 +69,14 @@ class ResilientOrchestrator(
       val result: Reply.Normal<T>? = candidates.suspendFirstNotNullResult { providerModel ->
         logger.debug { "Attempting ${providerModel.provider}/${providerModel.model}" }
         fun record(error: Reply.Error? = null, thrown: Throwable? = null, note: String? = null) {
-          attempts += Orchestration.Attempt(providerModel, error = error, thrown = thrown, note = note, loop = loop)
+          attempts += Orchestration.Attempt(providerModel, error = error, thrown = thrown, note = note, loop = loop, usage = error?.tokenUsage)
         }
         try {
           when (val reply = attempt(providerModel)) {
-            is Reply.Normal -> reply
+            is Reply.Normal -> {
+              attempts += Orchestration.Attempt(providerModel, loop = loop, usage = reply.tokenUsage)
+              reply
+            }
 
             is Reply.Error.InvalidApiKey -> {
               // session-permanent：剩下的 loop 都不要再試這個 provider
@@ -129,7 +132,7 @@ class ResilientOrchestrator(
 
       if (result != null) {
         logger.info { "Success on ${result.provider}/${result.model} (attemptsLeft=$attemptsLeft)" }
-        return Orchestration.Success(result)
+        return Orchestration.Success(result, attempts.toList())
       }
 
       attemptsLeft--

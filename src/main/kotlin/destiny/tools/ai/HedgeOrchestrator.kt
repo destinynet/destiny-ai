@@ -63,7 +63,22 @@ class HedgeOrchestrator(
       error = reply as? Reply.Error,
       thrown = thrown[pm],
       note = note ?: if (reply == null && thrown[pm] == null) "attempt returned null" else null,
+      usage = reply?.tokenUsage,
     )
+
+    /**
+     * 贏家以外、還沒記過的那幾家：hedge 一開始就全部送出了，都可能已計費。
+     * 已經跑完的照實記（含用量）；還在跑的取消，記成用量不明的一次嘗試。
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun settleOthers(winner: ProviderModel, recorded: Collection<ProviderModel>): List<Orchestration.Attempt> =
+      deferredMap.filterKeys { it != winner && it !in recorded }.map { (pm, d) ->
+        if (d.isCompleted && !d.isCancelled) attemptOf(pm, d.getCompleted())
+        else {
+          d.cancel()
+          Orchestration.Attempt(pm, note = "cancelled: another model won")
+        }
+      }
 
     val preferredResult: Reply<T>? = withTimeoutOrNull(preferredWait) {
       deferredMap[preferred]?.await()
@@ -72,8 +87,8 @@ class HedgeOrchestrator(
     if (preferredResult is Reply.Normal) {
       // preferred 在時限內成功完成 -> 回傳 preferred，並取消其他
       logger.info { "Preferred model $preferred succeeded within the time limit." }
-      deferredMap.filterKeys { it != preferred }.values.forEach { it.cancel() }
-      Orchestration.Success(preferredResult)
+      val others = settleOthers(preferred, emptySet())
+      Orchestration.Success(preferredResult, others + attemptOf(preferred, preferredResult))
     } else {
       val attempts = mutableListOf<Orchestration.Attempt>()
       // preferred 超時、失敗(Error)或回傳null -> 從 fallbacks 中選擇第一個成功的
@@ -108,9 +123,9 @@ class HedgeOrchestrator(
 
       winner?.let { (winnerModel, reply) ->
         logger.info { "Using fallback result from $winnerModel" }
-        // 取消所有其他仍在執行的任務
-        deferredMap.filterKeys { it != winnerModel }.values.forEach { if (it.isActive) it.cancel() }
-        Orchestration.Success(reply)
+        // 取消所有其他仍在執行的任務；preferred 與失敗的 fallback 已經記過
+        val others = settleOthers(winnerModel, attempts.map { it.providerModel })
+        Orchestration.Success(reply, attempts + others + attemptOf(winnerModel, reply))
       } ?: Orchestration.Exhausted(attempts).also { logger.error { it.describe() } }
     }
   }

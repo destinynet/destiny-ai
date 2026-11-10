@@ -111,4 +111,41 @@ class HedgeOrchestratorTest {
     }
     assertNull(result)
   }
+
+  // ─── 每一次嘗試的用量（全部都已送出，都可能已計費） ───
+
+  private fun billed(content: String, pm: ProviderModel, inTok: Int) = Reply.Normal(content, null, pm.provider, pm.model, inputTokens = inTok, outputTokens = 10)
+
+  @Test
+  fun `preferred win records the finished and the cancelled fallbacks too`() = runTest {
+    val o = orchestrator(fb1, fb2).executeExplained { pm ->
+      when (pm) {
+        preferred -> { delay(100.milliseconds); billed("preferred", pm, 300) }
+        fb1       -> { delay(50.milliseconds); billed("fast fallback", pm, 200) }
+        else      -> { delay(10.seconds); billed("slow fallback", pm, 100) }
+      }
+    } as Orchestration.Success
+    assertEquals(3, o.attempts.size)
+    // 贏家排最後、帶著用量
+    assertEquals(preferred, o.attempts.last().providerModel)
+    assertEquals(300, o.attempts.last().usage?.inputTokens)
+    // 先跑完的 fallback 照實記；還在跑的被取消，用量不明
+    assertEquals(200, o.attempts.single { it.providerModel == fb1 }.usage?.inputTokens)
+    val cancelled = o.attempts.single { it.providerModel == fb2 }
+    assertNull(cancelled.usage)
+    assertEquals("cancelled: another model won", cancelled.note)
+  }
+
+  @Test
+  fun `fallback win keeps the failed preferred attempt with its usage`() = runTest {
+    val o = orchestrator(fb1).executeExplained { pm ->
+      when (pm) {
+        preferred -> Reply.Error.DeserializationFailure("bad", "{}", pm.provider, pm.model, inputTokens = 400, outputTokens = 20)
+        else      -> { delay(2.seconds); billed("fallback", pm, 100) }
+      }
+    } as Orchestration.Success
+    assertEquals(listOf(preferred, fb1), o.attempts.map { it.providerModel })
+    assertEquals(400, o.attempts.first().usage?.inputTokens)
+    assertEquals(100, o.attempts.last().usage?.inputTokens)
+  }
 }

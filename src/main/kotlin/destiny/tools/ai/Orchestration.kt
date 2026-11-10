@@ -24,7 +24,11 @@ package destiny.tools.ai
  */
 sealed class Orchestration<out T : Any> {
 
-  data class Success<T : Any>(val reply: Reply.Normal<T>) : Orchestration<T>()
+  /**
+   * @param attempts **全部**嘗試，成功那一次排最後；成功之前失敗的那幾次、hedge 被取消的那幾家也在 ——
+   *   它們都已送出、都可能已計費（總帳見 `ModelCostService.usage`）。不給（fake、舊的呼叫端）就是空的
+   */
+  data class Success<T : Any>(val reply: Reply.Normal<T>, val attempts: List<Attempt> = emptyList()) : Orchestration<T>()
 
   /**
    * @param attempts 每次呼叫一筆，含 loop 編號；空 list 代表根本沒打出去（見 [note]）
@@ -67,8 +71,8 @@ sealed class Orchestration<out T : Any> {
   }
 
   /**
-   * 一次對某個 (provider, model) 的嘗試。三個描述欄位最多一個非 null：
-   * [error] 是 provider 回的分類結果、[thrown] 是 attempt 拋出的例外、[note] 是其他情況（超時、回 null）。
+   * 一次對某個 (provider, model) 的嘗試。三個描述欄位最多一個非 null，成功的那一次三個都是 null：
+   * [error] 是 provider 回的分類結果、[thrown] 是 attempt 拋出的例外、[note] 是其他情況（超時、回 null、被取消）。
    */
   data class Attempt(
     val providerModel: ProviderModel,
@@ -76,7 +80,16 @@ sealed class Orchestration<out T : Any> {
     val thrown: Throwable? = null,
     val note: String? = null,
     val loop: Int = 1,
+    /** 這次呼叫 provider 回報的用量（[tokenUsage]）；拿不到（例外、逾時、被取消、provider 沒報）是 null */
+    val usage: TokenUsage? = null,
   )
+
+  /** 送出過的每一次嘗試（成功與失敗都算） */
+  val allAttempts: List<Attempt>
+    get() = when (this) {
+      is Success   -> attempts
+      is Exhausted -> attempts
+    }
 
   fun successOrNull(): Reply.Normal<out T>? = (this as? Success<T>)?.reply
 }

@@ -9,6 +9,7 @@
  */
 package destiny.tools.workflow
 
+import destiny.tools.ai.TokenUsage
 import destiny.tools.ai.TokenUsageAccumulator
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
