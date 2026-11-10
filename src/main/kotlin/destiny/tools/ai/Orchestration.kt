@@ -46,6 +46,21 @@ sealed class Orchestration<out T : Any> {
     val allRetryable: Boolean
       get() = attempts.isNotEmpty() && attempts.all { it.error is Reply.Error.Retryable }
 
+    /**
+     * 最後一次嘗試出了什麼錯，一行、最多 500 字（存 DB、回報給使用者端用）：驗證不過就是驗證訊息本身，其他給類別與內容。
+     * 要每一次的明細用 [describe]。
+     */
+    val lastProblem: String
+      get() {
+        val last = attempts.lastOrNull() ?: return note ?: "no attempt"
+        return when {
+          last.error is Reply.Error.DeserializationFailure -> last.error.errorMessage
+          last.error != null                               -> last.error.toString()
+          last.thrown != null                              -> last.thrown.toString()
+          else                                             -> last.note ?: note ?: "no reply"
+        }.take(500)
+      }
+
     fun describe(): String = buildString {
       append("exhausted after ${attempts.size} attempt(s)")
       note?.let { append(" ($it)") }
@@ -92,4 +107,16 @@ sealed class Orchestration<out T : Any> {
     }
 
   fun successOrNull(): Reply.Normal<out T>? = (this as? Success<T>)?.reply
+
+  /**
+   * 把同一個流程裡其他幾次編排（例：寫 → 校對 → 重寫）的嘗試併進來，結果（成功的 reply 或失敗）留自己的。
+   * 嘗試的順序是 [others] 在前、自己的在後 —— 「贏家排最後」仍然成立，但不是時間順序。總帳用 `ModelCostService.usage`。
+   */
+  fun withSpendOf(vararg others: Orchestration<*>): Orchestration<T> {
+    val earlier = others.flatMap { it.allAttempts }
+    return when (this) {
+      is Success   -> Success(reply, earlier + attempts)
+      is Exhausted -> Exhausted(earlier + attempts, note)
+    }
+  }
 }

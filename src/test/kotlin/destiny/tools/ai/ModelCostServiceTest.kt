@@ -69,6 +69,7 @@ class ModelCostServiceTest {
     // (2000*3 + 800*15)/1e6 = 0.018
     assertEquals(0.018, u.costUsd!!, 1e-12)
     assertEquals(0, u.unpricedAttempts)
+    assertEquals(listOf(c1), u.models)
   }
 
   @Test
@@ -91,5 +92,28 @@ class ModelCostServiceTest {
   fun `usage — nothing sent`() {
     val u = service.usage(Orchestration.Exhausted(emptyList(), note = "no provider models"))
     assertEquals(OrchestrationUsage(0, null, null, 0), u)
+  }
+
+  @Test
+  fun `withSpendOf — a write, review, rewrite flow is one bill, the result stays its own`() {
+    val written = Orchestration.Success(normal(Provider.CLAUDE, "c1", 1000, 500), listOf(Orchestration.Attempt(c1, usage = TokenUsage(1000, 500))))
+    val review = Orchestration.Success(normal(Provider.OPENAI, "o1", 100, 10), listOf(Orchestration.Attempt(o1, usage = TokenUsage(100, 10))))
+    val rewrite = Orchestration.Exhausted(listOf(Orchestration.Attempt(c1, error = Reply.Error.DeserializationFailure("still bad", "{}", Provider.CLAUDE, "c1", 900, 90), usage = TokenUsage(900, 90))))
+
+    val kept = written.withSpendOf(review, rewrite) as Orchestration.Success
+    assertEquals(written.reply, kept.reply)
+    assertEquals(listOf(o1, c1, c1), kept.attempts.map { it.providerModel })
+    assertEquals(TokenUsage(2000, 600), service.usage(kept).tokens)
+    assertEquals(listOf(o1, c1), service.usage(kept).models)
+
+    val failed = rewrite.withSpendOf(written, review) as Orchestration.Exhausted
+    assertEquals(3, failed.attempts.size)
+    assertEquals("still bad", failed.lastProblem)
+  }
+
+  @Test
+  fun `lastProblem — thrown, note, nothing sent`() {
+    assertEquals("java.lang.IllegalStateException: timeout", Orchestration.Exhausted(listOf(Orchestration.Attempt(c1, thrown = IllegalStateException("timeout")))).lastProblem)
+    assertEquals("no provider models", Orchestration.Exhausted(emptyList(), note = "no provider models").lastProblem)
   }
 }

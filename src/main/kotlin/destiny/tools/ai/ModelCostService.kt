@@ -47,7 +47,7 @@ class ModelCostService(private val catalog: IModelCatalog) {
       if (u != null) tokens = (tokens ?: TokenUsage()) + u
       if (c == null) unpriced++ else cost = (cost ?: 0.0) + c
     }
-    return OrchestrationUsage(attempts.size, tokens, cost, unpriced)
+    return OrchestrationUsage(attempts.size, tokens, cost, unpriced, attempts.map { it.providerModel }.distinct())
   }
 
   /**
@@ -67,10 +67,12 @@ class ModelCostService(private val catalog: IModelCatalog) {
  * @param tokens 有回報用量的那幾次相加；一次都沒有就是 null
  * @param costUsd 有用量、也查得到價的那幾次相加；一次都沒有就是 null
  * @param unpricedAttempts 送出了、但用量或價格不明的次數（例外、逾時、被取消、catalog 沒登記）—— 這幾次可能已計費，金額未知
+ * @param models 用到的 (provider, model)，依第一次出現的順序、去重
  */
 data class OrchestrationUsage(
   val attempts: Int,
   val tokens: TokenUsage?,
   val costUsd: Double?,
   val unpricedAttempts: Int,
+  val models: List<ProviderModel> = emptyList(),
 )
