@@ -72,7 +72,7 @@ data class ExecutionMetadata(
   /**
    * AI 呼叫總次數（僅文字/chat 呼叫；生圖見 [totalImageCalls]）。
    *
-   * 計的是**已發起**的呼叫 —— 含失敗與被取消者，與 [costUsd] 同一口徑：請求送出後對方就可能
+   * 計的是**已發起**的呼叫 —— 含失敗與被取消者、含 orchestrator 的每一次重試（驗證不過、換 model），與 [costUsd] 同一口徑：請求送出後對方就可能
    * 已計費，事後把它從次數裡抹掉，只會讓兩個欄位對同一次失敗給出矛盾的說法。
    * 代價是它為**上界**：連 orchestrator 都還沒碰到就失敗的 segment（例如引擎缺相依設定）也計入。
    *
@@ -98,7 +98,8 @@ data class ExecutionMetadata(
 
   /**
    * 全計畫累計成本 (USD)；需引擎注入 `ModelCostService` 才會算得出，否則 null。
-   * 多模型計畫逐筆 reply 依各自 pricing 計價後加總（單一 model 無法涵蓋）。
+   * 多模型計畫逐筆依各自 pricing 計價後加總（單一 model 無法涵蓋）。
+   * 含驗證不過、重試、hedge 輸掉的那幾次（只要 provider 回報了用量）；用量不明的嘗試（例外、逾時、被取消）不猜。
    */
   val costUsd: Double? = null,
 

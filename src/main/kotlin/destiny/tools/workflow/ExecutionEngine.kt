@@ -405,7 +405,7 @@ class DefaultExecutionEngine(
     val formatSpec = segment.formatSpec
       ?: throw IllegalStateException("Segment ${segment.id} must have formatSpec for DefaultExecutionEngine")
 
-    val reply = orchestrator.chatComplete(
+    val orchestration = orchestrator.chatCompleteOrExplain(
       formatSpec = formatSpec,
       message = prompt,
       postProcessors = postProcessors,
@@ -413,9 +413,8 @@ class DefaultExecutionEngine(
       funCalls = segment.funCalls,
       chatOptionsTemplate = chatOptionsTemplate,
       providerImpl = providerImpl
-    ) ?: throw IllegalStateException("Orchestrator returned null for segment ${segment.id}")
-
-    recorder.record(reply.toCallUsage(segment.id))
+    )
+    val reply = settle(orchestration, segment.id, recorder) { "Orchestrator exhausted for segment ${segment.id}" }
     return reply.content as SegmentOutput
   }
 
@@ -438,7 +437,7 @@ class DefaultExecutionEngine(
           val input = segment.itemInputBuilder(item, context)
           val prompt = segment.promptBuilder(input, context)
 
-          val reply = orchestrator.chatComplete(
+          val orchestration = orchestrator.chatCompleteOrExplain(
             formatSpec = formatSpec,
             message = prompt,
             postProcessors = postProcessors,
@@ -446,9 +445,8 @@ class DefaultExecutionEngine(
             funCalls = emptySet(),
             chatOptionsTemplate = chatOptionsTemplate,
             providerImpl = providerImpl
-          ) ?: throw IllegalStateException("Orchestrator returned null for parallel item $index")
-
-          recorder.record(reply.toCallUsage(segment.id))
+          )
+          val reply = settle(orchestration, segment.id, recorder) { "Orchestrator exhausted for parallel item $index" }
           Result.success(reply.content as SegmentOutput)
         } catch (e: Exception) {
           // 同上：我們自己被取消時不得降級成 Result.failure —— 那會混進 FailedItem，
@@ -514,6 +512,45 @@ class DefaultExecutionEngine(
   }
 
   /** 單通 AI 呼叫的用量快照；成本於擷取當下依該 reply 的 provider/model pricing 算好（事後會失真）。 */
+  /**
+   * 一次編排的帳：**每一次送出的嘗試**都入帳（驗證不過、重試、hedge 輸掉的那幾家都可能已計費），再交回成功的 reply；
+   * 失敗就先記完帳再丟例外 —— 失敗的段落一樣花了錢。
+   *
+   * - [RunRecorder.onAiCallsLaunched] 在發起前已經算了 1 次，這裡補上重試多送的次數（`totalAiCalls` 是「已發起」）
+   * - 只有帶用量的嘗試記成一筆 [CallUsage]（`SegmentUsage.calls` 是「有拿到回應」），所以 `Σcalls ≤ totalAiCalls` 仍然成立
+   * - 成功那一次沿用 reply 自己回報的 provider／model 記帳，與先前一致（`modelsUsed`、查價的 key 不變）
+   * - 沒有嘗試清單的 orchestrator（只實作 `chatComplete` 的 fake）：照舊只記成功的 reply
+   */
+  private fun <T : Any> settle(
+    orchestration: Orchestration<out T>, segmentId: SegmentId, recorder: RunRecorder, failure: () -> String,
+  ): Reply.Normal<out T> {
+    val attempts = orchestration.allAttempts
+    if (attempts.size > 1) recorder.onAiCallsLaunched(attempts.size - 1)
+    when (orchestration) {
+      is Orchestration.Success -> {
+        attempts.dropLast(1).forEach { a -> a.usage?.let { recorder.record(a.toCallUsage(segmentId, it)) } }
+        recorder.record(orchestration.reply.toCallUsage(segmentId))
+        return orchestration.reply
+      }
+
+      is Orchestration.Exhausted -> {
+        attempts.forEach { a -> a.usage?.let { recorder.record(a.toCallUsage(segmentId, it)) } }
+        throw IllegalStateException("${failure()}: ${orchestration.describe()}")
+      }
+    }
+  }
+
+  private fun Orchestration.Attempt.toCallUsage(segmentId: SegmentId, usage: TokenUsage): CallUsage = CallUsage(
+    segmentId = segmentId,
+    provider = providerModel.provider.name,
+    model = providerModel.model,
+    inputTokens = usage.inputTokens,
+    outputTokens = usage.outputTokens,
+    cacheCreationTokens = usage.cacheCreationTokens,
+    cacheReadTokens = usage.cacheReadTokens,
+    costUsd = modelCostService?.cost(providerModel.provider, providerModel.model, usage)
+  )
+
   private fun Reply.Normal<*>.toCallUsage(segmentId: SegmentId): CallUsage = CallUsage(
     segmentId = segmentId,
     provider = provider.name,
