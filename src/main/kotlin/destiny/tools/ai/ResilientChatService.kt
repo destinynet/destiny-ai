@@ -55,6 +55,8 @@ class ResilientChatService(
     chatOptionsTemplate: ChatOptions,
     providerImpl: (Provider) -> IChatCompletion
   ): Orchestration<out T> {
+    // repairInvalidOutput：驗證不過的回覆與錯誤接在後面，下一次嘗試帶著它送（跨 provider 也成立：訊息是純文字）
+    val conversation = messages.toMutableList()
     return core.executeExplained { providerModel ->
       val impl = providerImpl.invoke(providerModel.provider)
       val currentChatOptions = chatOptionsTemplate.copy(
@@ -62,10 +64,23 @@ class ResilientChatService(
         maxTokens = providerModel.maxTokens ?: chatOptionsTemplate.maxTokens,
         thinking = providerModel.thinking ?: chatOptionsTemplate.thinking
       )
-      impl.typedChatComplete(
-        providerModel.model, messages, formatSpec as FormatSpec<T>, json, locale,
+      // 傳副本：impl 若保留參照，之後接上的修正訊息不會回頭改到這一次送出的內容
+      val reply = impl.typedChatComplete(
+        providerModel.model, conversation.toList(), formatSpec as FormatSpec<T>, json, locale,
         currentChatOptions, postProcessors, config.user, funCalls, config.modelTimeout
       )
+      if (config.repairInvalidOutput && reply is Reply.Error.DeserializationFailure && reply.originalContent.isNotBlank()) {
+        // 原回覆空白就不接（Anthropic 不收空的 assistant 訊息），下一次照原訊息重送
+        conversation += Msg(Role.ASSISTANT, reply.originalContent)
+        conversation += Msg(Role.USER, repairPrompt(reply.errorMessage))
+      }
+      reply
     }
+  }
+
+  companion object {
+    /** 驗證不過時請 model 照著改的訊息（全專案唯一一份） */
+    fun repairPrompt(errorMessage: String): String =
+      "The response above has errors. Rewrite the whole thing and fix these:\n${errorMessage.removePrefix("validation failed: ")}"
   }
 }

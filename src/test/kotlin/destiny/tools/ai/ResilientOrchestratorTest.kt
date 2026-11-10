@@ -171,4 +171,42 @@ class ResilientOrchestratorTest {
     assertEquals(2, o.attempts.size)
     assertTrue(o.attempts.all { it.usage == null })
   }
+
+  // ─── 重送也一樣的錯：只排除那個 model ───
+
+  @Test
+  fun `a model that hit max tokens is not retried, others still are`() = runTest {
+    val seen = mutableListOf<ProviderModel>()
+    val o = ResilientOrchestrator(setOf(pmA, pmB), delayBetweenModelLoops = 1.seconds, maxTotalAttempts = 3).executeExplained { pm ->
+      seen += pm
+      when (pm) {
+        pmA  -> Reply.Error.MaxTokensReached(pm.provider, "cut")
+        else -> Reply.Error.Busy(pm.provider)
+      }
+    } as Orchestration.Exhausted
+    assertEquals(1, seen.count { it == pmA })
+    assertEquals(3, seen.count { it == pmB })
+    assertNull(o.note)
+  }
+
+  @Test
+  fun `single model with a resend-proof error stops at once`() = runTest {
+    var calls = 0
+    val o = ResilientOrchestrator(setOf(pmA), delayBetweenModelLoops = 1.seconds, maxTotalAttempts = 3).executeExplained<String> { pm ->
+      calls++
+      Reply.Error.TooLong("prompt too long", pm.provider)
+    } as Orchestration.Exhausted
+    assertEquals(1, calls)
+    assertEquals("every model hit an error that a resend cannot fix", o.note)
+  }
+
+  @Test
+  fun `failed validation is still retried`() = runTest {
+    var calls = 0
+    ResilientOrchestrator(setOf(pmA), delayBetweenModelLoops = 1.seconds, maxTotalAttempts = 3).executeExplained<String> { pm ->
+      calls++
+      Reply.Error.DeserializationFailure("bad", "{}", pm.provider, pm.model)
+    }
+    assertEquals(3, calls)
+  }
 }

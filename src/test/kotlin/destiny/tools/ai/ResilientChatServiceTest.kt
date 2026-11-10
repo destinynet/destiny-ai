@@ -7,6 +7,7 @@ import java.util.*
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
 
@@ -98,5 +99,61 @@ class ResilientChatServiceTest {
       FakeChat(provider) { _, _ -> Reply.Error.Busy(provider) }
     }
     assertNull(result)
+  }
+
+  // ─── repairInvalidOutput：驗證不過時帶著錯誤重寫 ───
+
+  /** 記下每一次收到的對話；第一次回驗證不過，之後成功 */
+  private class RecordingChat(override val provider: Provider, val firstOriginal: String) : IChatCompletion {
+    val seen = mutableListOf<List<Msg>>()
+    override suspend fun chatComplete(
+      model: String, messages: List<Msg>, user: String?, funCalls: Set<IFunctionDeclaration>,
+      timeout: Duration, chatOptions: ChatOptions, jsonSchema: JsonSchemaSpec?, maxFunctionCallDepth: Int
+    ): Reply<String> = error("unused")
+
+    @Suppress("UNCHECKED_CAST")
+    override suspend fun <T : Any> typedChatComplete(
+      model: String, messages: List<Msg>, formatSpec: FormatSpec<T>, json: Json, locale: Locale,
+      chatOptions: ChatOptions, postProcessors: List<IPostProcessor>, user: String?,
+      funCalls: Set<IFunctionDeclaration>, timeout: Duration, maxFunctionCallDepth: Int
+    ): Reply<T>? {
+      seen += messages
+      return (if (seen.size == 1) Reply.Error.DeserializationFailure("validation failed: g1 cites f9", firstOriginal, provider, model, 100, 20)
+      else Reply.Normal("fixed", null, provider, model)) as Reply<T>
+    }
+  }
+
+  private val pm = ProviderModel(Provider.CLAUDE, "c")
+  private val ask = listOf(Msg(Role.USER, "write it"))
+
+  @Test
+  fun `repair appends the bad reply and the error before the next attempt`() = runTest {
+    val chat = RecordingChat(Provider.CLAUDE, "{\"bad\":true}")
+    val o = ResilientChatService(config(pm).copy(repairInvalidOutput = true))
+      .chatCompleteOrExplain(stringSpec, ask, emptyList()) { chat } as Orchestration.Success
+    assertEquals("fixed", o.reply.content)
+    assertEquals(ask, chat.seen[0])
+    val second = chat.seen[1]
+    assertEquals(listOf(Role.USER, Role.ASSISTANT, Role.USER), second.map { it.role })
+    assertEquals(Msg(Role.ASSISTANT, "{\"bad\":true}"), second[1])
+    val repair = ResilientChatService.repairPrompt("validation failed: g1 cites f9")
+    assertEquals(Msg(Role.USER, repair), second[2])
+    assertTrue("g1 cites f9" in repair && "validation failed" !in repair)
+    // 驗證不過那一次的用量也在
+    assertEquals(100, o.attempts.first().usage?.inputTokens)
+  }
+
+  @Test
+  fun `without repair the same messages are resent`() = runTest {
+    val chat = RecordingChat(Provider.CLAUDE, "{}")
+    ResilientChatService(config(pm)).chatCompleteOrExplain(stringSpec, ask, emptyList()) { chat }
+    assertEquals(listOf(ask, ask), chat.seen)
+  }
+
+  @Test
+  fun `a blank bad reply is not appended`() = runTest {
+    val chat = RecordingChat(Provider.CLAUDE, "  ")
+    ResilientChatService(config(pm).copy(repairInvalidOutput = true)).chatCompleteOrExplain(stringSpec, ask, emptyList()) { chat }
+    assertEquals(listOf(ask, ask), chat.seen)
   }
 }

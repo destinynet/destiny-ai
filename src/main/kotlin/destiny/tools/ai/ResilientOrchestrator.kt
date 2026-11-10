@@ -47,18 +47,21 @@ class ResilientOrchestrator(
 
     // 跨 loop 共享的狀態：API key 無效的 provider 整個 execute 都不再嘗試
     val disabledProviders = mutableSetOf<Provider>()
+    // 同樣的輸入重送也一樣會錯的 model（輸出超過上限、輸入太長、function call 繞圈）：這次編排不再試它，其他 model 照常
+    val disabledModels = mutableSetOf<ProviderModel>()
     val attempts = mutableListOf<Orchestration.Attempt>()
     var attemptsLeft = maxTotalAttempts
 
     while (attemptsLeft > 0) {
       val loop = maxTotalAttempts - attemptsLeft + 1
       val candidates: List<ProviderModel> = providerModels
-        .filter { it.provider !in disabledProviders }
+        .filter { it.provider !in disabledProviders && it !in disabledModels }
         .shuffled()
 
       if (candidates.isEmpty()) {
-        logger.error { "All providers disabled (invalid API keys or similar); aborting after ${loop - 1} loops." }
-        return Orchestration.Exhausted(attempts, note = "all providers disabled (invalid API key)")
+        val note = if (disabledModels.isNotEmpty()) "every model hit an error that a resend cannot fix" else "all providers disabled (invalid API key)"
+        logger.error { "No candidates left ($note); aborting after ${loop - 1} loops." }
+        return Orchestration.Exhausted(attempts, note = note)
       }
 
       logger.info { "Starting attempt loop (attemptsLeft=$attemptsLeft), candidates: ${candidates.map { "${it.provider}/${it.model}" }}" }
@@ -103,6 +106,7 @@ class ResilientOrchestrator(
 
             is Reply.Error.Terminal -> {
               logger.warn { "Terminal on ${providerModel.provider}/${providerModel.model}: $reply" }
+              if (reply.sameOnResend) disabledModels += providerModel
               record(error = reply)
               null
             }
@@ -151,5 +155,9 @@ class ResilientOrchestrator(
 
   companion object {
     val logger = KotlinLogging.logger {}
+
+    /** 同樣的輸入送給同一個 model 一定得到同樣的錯：不必再對它重送（換一個 model 可能可以） */
+    internal val Reply.Error.sameOnResend: Boolean
+      get() = this is Reply.Error.MaxTokensReached || this is Reply.Error.TooLong || this is Reply.Error.FunctionCallLoopExceeded
   }
 }
